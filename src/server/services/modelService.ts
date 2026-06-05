@@ -40,6 +40,7 @@ import { fetchGroupRatioForSite } from './modelPricingService.js';
 const API_TOKEN_DISCOVERY_TIMEOUT_MS = 8_000;
 const MODEL_DISCOVERY_TIMEOUT_MS = 12_000;
 const MODEL_REFRESH_BATCH_SIZE = 3;
+type SiteRow = typeof schema.sites.$inferSelect;
 const GEMINI_CLI_STATIC_MODELS = [
   'gemini-2.5-pro',
   'gemini-2.5-flash',
@@ -1461,13 +1462,13 @@ export async function rebuildTokenRoutesFromAvailability() {
 
   const siteGroupRatioBySiteId = new Map<number, Record<string, number>>();
   if (siteIdsWithTokenGroup.size > 0) {
-    const allSites = await db.select().from(schema.sites).all();
+    const allSites = await db.select().from(schema.sites).all() as SiteRow[];
     const siteById = new Map(allSites.map((s) => [s.id, s]));
 
     await Promise.all(
       Array.from(siteIdsWithTokenGroup).map(async (siteId) => {
         const site = siteById.get(siteId);
-        if (!site || !site.enabled) return;
+        if (!site || site.status !== 'active') return;
         try {
           const groupRatio = await fetchGroupRatioForSite(site);
           if (groupRatio) {

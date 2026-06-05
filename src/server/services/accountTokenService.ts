@@ -2,6 +2,7 @@
 import { db, schema } from '../db/index.js';
 import { getInsertedRowId } from '../db/insertHelpers.js';
 import { getCredentialModeFromExtraConfig } from './accountExtraConfig.js';
+import { getCachedGroupRatio } from './modelPricingService.js';
 
 type UpstreamApiToken = {
   name?: string | null;
@@ -488,11 +489,17 @@ export async function listTokensWithRelations(accountId?: number) {
   return rows
     .filter((row) => !isApiKeyConnection(row.accounts))
     .map((row) => {
-    const { token, ...tokenMeta } = row.account_tokens;
+    const { token, tokenGroup, ...tokenMeta } = row.account_tokens;
+    const groupRatio = getCachedGroupRatio(row.sites.id, row.accounts.id);
+    const groupMultiplier = groupRatio && tokenGroup && typeof groupRatio[tokenGroup] === 'number'
+      ? groupRatio[tokenGroup]
+      : null;
     return {
       ...tokenMeta,
+      tokenGroup,
       valueStatus: resolveAccountTokenValueStatus(row.account_tokens),
       tokenMasked: maskToken(token, row.sites.platform),
+      groupMultiplier,
       account: {
         id: row.accounts.id,
         username: row.accounts.username,

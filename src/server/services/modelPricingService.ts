@@ -532,6 +532,14 @@ export function getCachedModelRoutingReferenceCost(input: {
   return cost;
 }
 
+export function getCachedGroupRatio(siteId: number, accountId: number): Record<string, number> | null {
+  const key = `${siteId}:${accountId}`;
+  const cached = pricingCache.get(key);
+  if (!cached || !cached.data) return null;
+  if (Date.now() - cached.fetchedAt >= cached.ttlMs) return null;
+  return cached.data.groupRatio;
+}
+
 function resolveModel(modelName: string, data: PricingData): PricingModel | null {
   const exact = data.models.get(modelName);
   if (exact) return exact;

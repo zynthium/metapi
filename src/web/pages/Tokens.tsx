@@ -1226,6 +1226,10 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
                     <MobileField label="账号" value={token.account?.username || `account-${token.accountId}`} />
                     <MobileField label="分组" value={token.tokenGroup || 'default'} />
                     <MobileField
+                      label="倍率"
+                      value={token.groupMultiplier != null ? `${token.groupMultiplier.toFixed(2)}x` : '-'}
+                    />
+                    <MobileField
                       label="状态"
                       value={(
                         <span className={`badge ${isPending ? 'badge-warning' : (token.enabled ? 'badge-success' : 'badge-muted')}`} style={{ fontSize: 11 }}>
@@ -1321,6 +1325,7 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
                 <th>来源站点</th>
                 <th>账号</th>
                 <th>分组</th>
+                <th>倍率</th>
                 <th>状态</th>
                 <th>默认</th>
                 <th>更新时间</th>
@@ -1374,6 +1379,7 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
                     </td>
                     <td>{token.account?.username || `account-${token.accountId}`}</td>
                     <td>{token.tokenGroup || 'default'}</td>
+                    <td>{token.groupMultiplier != null ? `${token.groupMultiplier.toFixed(2)}x` : '-'}</td>
                     <td>
                       {isPending ? (
                         <span className="badge badge-warning" style={{ fontSize: 11 }}>待补全</span>
