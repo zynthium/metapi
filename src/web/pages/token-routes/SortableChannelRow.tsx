@@ -41,6 +41,7 @@ export function SortableChannelRow({
   onSaveToken,
   onDeleteChannel,
   onToggleEnabled,
+  onMultiplierChange,
   onSiteBlockModel,
 }: SortableChannelRowProps) {
   const resolvedPriority = displayPriority ?? channel.priority ?? 0;
@@ -315,6 +316,43 @@ export function SortableChannelRow({
                   </div>
                 </div>
 
+                {onMultiplierChange ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ fontSize: 11, color: 'var(--color-text-muted)', whiteSpace: 'nowrap' }}>
+                      倍率
+                    </span>
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      defaultValue={channel.multiplier ?? 1.0}
+                      onBlur={(e) => {
+                        const val = Number.parseFloat(e.target.value);
+                        if (Number.isFinite(val) && val >= 0) {
+                          onMultiplierChange(channel.id, val);
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          const target = e.target as HTMLInputElement;
+                          target.blur();
+                        }
+                      }}
+                      style={{
+                        width: 70,
+                        padding: '2px 6px',
+                        fontSize: 11,
+                        border: '1px solid var(--color-border)',
+                        borderRadius: 6,
+                        background: 'var(--color-bg-input)',
+                        color: 'var(--color-text-primary)',
+                        textAlign: 'right',
+                        fontVariantNumeric: 'tabular-nums',
+                      }}
+                    />
+                  </div>
+                ) : null}
+
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10, flexWrap: 'wrap' }}>
                   <button
                     onClick={onSaveToken}
@@ -557,6 +595,43 @@ export function SortableChannelRow({
               {isUpdatingToken ? <span className="spinner spinner-sm" /> : '保存'}
             </button>
           </div>
+
+          {onMultiplierChange ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ fontSize: 11, color: 'var(--color-text-muted)', whiteSpace: 'nowrap' }}>
+                倍率
+              </span>
+              <input
+                type="number"
+                step="0.1"
+                min="0"
+                defaultValue={channel.multiplier ?? 1.0}
+                onBlur={(e) => {
+                  const val = Number.parseFloat(e.target.value);
+                  if (Number.isFinite(val) && val >= 0) {
+                    onMultiplierChange(channel.id, val);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    const target = e.target as HTMLInputElement;
+                    target.blur();
+                  }
+                }}
+                style={{
+                  width: 64,
+                  padding: '2px 6px',
+                  fontSize: 11,
+                  border: '1px solid var(--color-border)',
+                  borderRadius: 6,
+                  background: 'var(--color-bg-input)',
+                  color: 'var(--color-text-primary)',
+                  textAlign: 'right',
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              />
+            </div>
+          ) : null}
 
           <button
             onClick={() => onToggleEnabled(channel.enabled === false)}

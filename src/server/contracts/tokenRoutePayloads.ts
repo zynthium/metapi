@@ -6,6 +6,7 @@ const routeChannelCreatePayloadSchema = z.object({
   sourceModel: z.string().optional(),
   priority: z.number().optional(),
   weight: z.number().optional(),
+  multiplier: z.number().optional(),
 }).passthrough();
 
 const routeChannelBatchCreatePayloadSchema = z.object({
@@ -13,6 +14,7 @@ const routeChannelBatchCreatePayloadSchema = z.object({
     accountId: z.number().int().positive(),
     tokenId: z.union([z.number().int().positive(), z.null()]).optional(),
     sourceModel: z.string().optional(),
+    multiplier: z.number().optional(),
   }).passthrough()).min(1),
 }).passthrough();
 
@@ -22,6 +24,7 @@ const routeChannelUpdatePayloadSchema = z.object({
   priority: z.number().optional(),
   weight: z.number().optional(),
   enabled: z.boolean().optional(),
+  multiplier: z.number().optional(),
 }).passthrough();
 
 const tokenRouteCreatePayloadSchema = z.object({
@@ -118,6 +121,9 @@ function formatTokenRoutePayloadError(error: z.ZodError): string {
   }
   if (firstPath === 'weight') {
     return 'Invalid weight. Expected number.';
+  }
+  if (firstPath === 'multiplier') {
+    return 'Invalid multiplier. Expected number.';
   }
   if (firstPath === 'refreshModels') {
     return 'Invalid refreshModels. Expected boolean.';

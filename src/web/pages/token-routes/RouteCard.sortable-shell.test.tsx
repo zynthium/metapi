@@ -94,6 +94,7 @@ describe('RouteCard sortable shell', () => {
         onSaveToken={vi.fn()}
         onDeleteChannel={vi.fn()}
         onToggleChannelEnabled={vi.fn()}
+        onMultiplierChange={vi.fn()}
         onChannelDragEnd={vi.fn()}
         missingTokenSiteItems={[]}
         missingTokenGroupItems={[]}

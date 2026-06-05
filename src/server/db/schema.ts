@@ -218,6 +218,7 @@ export const routeChannels = sqliteTable('route_channels', {
   sourceModel: text('source_model'),
   priority: integer('priority').default(0),
   weight: integer('weight').default(10),
+  multiplier: real('multiplier').default(1.0),
   enabled: integer('enabled', { mode: 'boolean' }).default(true),
   manualOverride: integer('manual_override', { mode: 'boolean' }).default(false),
   successCount: integer('success_count').default(0),

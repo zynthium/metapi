@@ -2888,6 +2888,45 @@ export class TokenRouter {
       );
     }
 
+    if (routeStrategy === 'lowest_multiplier') {
+      const multiplierCandidates = match.channels.filter((candidate) => {
+        if (isOauthRouteUnitCandidate(candidate)) return false;
+        const reasons = this.getCandidateEligibilityReasons(candidate, {
+          requestedModel,
+          bypassSourceModelCheck,
+          excludeChannelIds: [],
+          nowIso,
+          downstreamPolicy,
+        });
+        if (reasons.length > 0) return false;
+        return (candidate.channel.consecutiveFailCount ?? 0) < 3;
+      });
+      if (multiplierCandidates.length === 0) return null;
+      const breakerFiltered = filterSiteRuntimeBrokenCandidatesByModel(multiplierCandidates, runtimeModelResolver, nowMs);
+      const sorted = [...breakerFiltered.candidates].sort((a, b) => {
+        const multA = a.channel.multiplier ?? 1.0;
+        const multB = b.channel.multiplier ?? 1.0;
+        if (multA !== multB) return multA - multB;
+        return (a.channel.priority ?? 0) - (b.channel.priority ?? 0);
+      });
+      const selected = sorted[0] ?? null;
+      if (!selected) return null;
+      return await this.finalizeSelectedCandidateForDispatch(
+        selected,
+        match,
+        requestedModel,
+        mappedModel,
+        downstreamPolicy,
+        recordSelection,
+        nowIso,
+        nowMs,
+        undefined,
+        undefined,
+        false,
+        excludeChannelIds,
+      );
+    }
+
     if (routeStrategy === 'stable_first') {
       const breakerFiltered = filterSiteRuntimeBrokenCandidatesByModel(available, runtimeModelResolver, nowMs);
       const candidates = filterRecentlyFailedCandidates(breakerFiltered.candidates, nowMs);

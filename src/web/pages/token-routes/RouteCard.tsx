@@ -87,6 +87,7 @@ type RouteCardProps = {
   onSaveToken: (routeId: number, channelId: number, accountId: number) => void;
   onDeleteChannel: (channelId: number, routeId: number) => void;
   onToggleChannelEnabled: (channelId: number, routeId: number, enabled: boolean) => void;
+  onMultiplierChange: (channelId: number, multiplier: number) => void;
   onChannelDragEnd: (routeId: number, event: DragEndEvent) => void;
   // Missing token hints
   missingTokenSiteItems: MissingTokenRouteSiteActionItem[];
@@ -373,6 +374,7 @@ type SortableChannelShellProps = {
   onSaveToken: (routeId: number, channelId: number, accountId: number) => void;
   onDeleteChannel: (channelId: number, routeId: number) => void;
   onToggleChannelEnabled: (channelId: number, routeId: number, enabled: boolean) => void;
+  onMultiplierChange: (channelId: number, multiplier: number) => void;
   onSiteBlockModel: (channelId: number, routeId: number) => void;
   railLabel: string;
   mobileRailLabel: string;
@@ -403,6 +405,7 @@ function SortableChannelShell({
   onSaveToken,
   onDeleteChannel,
   onToggleChannelEnabled,
+  onMultiplierChange,
   onSiteBlockModel,
   railLabel,
   mobileRailLabel,
@@ -527,6 +530,7 @@ function SortableChannelShell({
         onSaveToken={() => onSaveToken(routeId, channel.id, channel.accountId)}
         onDeleteChannel={() => onDeleteChannel(channel.id, routeId)}
         onToggleEnabled={(enabled) => onToggleChannelEnabled(channel.id, routeId, enabled)}
+        onMultiplierChange={(chId, multiplier) => onMultiplierChange(chId, multiplier)}
         onSiteBlockModel={channelManagementDisabled ? undefined : () => onSiteBlockModel(channel.id, routeId)}
       />
     </div>
@@ -560,6 +564,7 @@ function RouteCardInner({
   onSaveToken,
   onDeleteChannel,
   onToggleChannelEnabled,
+  onMultiplierChange,
   onChannelDragEnd,
   missingTokenSiteItems,
   missingTokenGroupItems,
@@ -601,6 +606,11 @@ function RouteCardInner({
       value: 'stable_first',
       label: tr('稳定优先'),
       description: getRouteRoutingStrategyDescription('stable_first'),
+    },
+    {
+      value: 'lowest_multiplier',
+      label: tr('最低倍率'),
+      description: getRouteRoutingStrategyDescription('lowest_multiplier'),
     },
   ] as const;
 
@@ -1211,6 +1221,7 @@ function RouteCardInner({
                             onSaveToken={onSaveToken}
                             onDeleteChannel={onDeleteChannel}
                             onToggleChannelEnabled={onToggleChannelEnabled}
+                            onMultiplierChange={onMultiplierChange}
                             onSiteBlockModel={onSiteBlockModel}
                             railLabel={railSection ? `P${bucketIndex} · ${railSection.channelCount}` : railLabel}
                             mobileRailLabel={mobileRailLabel}

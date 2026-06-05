@@ -1102,6 +1102,18 @@ export default function TokenRoutes() {
     }
   };
 
+  const handleMultiplierChange = async (channelId: number, multiplier: number) => {
+    setUpdatingChannel((prev) => ({ ...prev, [channelId]: true }));
+    try {
+      await api.updateChannel(channelId, { multiplier });
+      toast.success('通道倍率已更新');
+    } catch (e: any) {
+      toast.error(e.message || '更新通道倍率失败');
+    } finally {
+      setUpdatingChannel((prev) => ({ ...prev, [channelId]: false }));
+    }
+  };
+
   const handleChannelTokenSave = async (routeId: number, channelId: number, accountId: number) => {
     const tokenId = channelTokenDraft[channelId];
     const tokenOptions = getRouteCandidateView(routeId).tokenOptionsByAccountId[accountId] || [];
@@ -1473,6 +1485,12 @@ export default function TokenRoutes() {
   handleToggleChannelEnabledRef.current = handleToggleChannelEnabled;
   const stableToggleChannelEnabled = useCallback(
     (channelId: number, routeId: number, enabled: boolean) => handleToggleChannelEnabledRef.current(channelId, routeId, enabled),
+    [],
+  );
+  const handleMultiplierChangeRef = useRef(handleMultiplierChange);
+  handleMultiplierChangeRef.current = handleMultiplierChange;
+  const stableMultiplierChange = useCallback(
+    (channelId: number, multiplier: number) => handleMultiplierChangeRef.current(channelId, multiplier),
     [],
   );
   const handleChannelDragEndRef = useRef(handleChannelDragEnd);
@@ -1856,6 +1874,7 @@ export default function TokenRoutes() {
                     onSaveToken={stableChannelTokenSave}
                     onDeleteChannel={stableDeleteChannel}
                     onToggleChannelEnabled={stableToggleChannelEnabled}
+                    onMultiplierChange={stableMultiplierChange}
                     onChannelDragEnd={stableChannelDragEnd}
                     missingTokenSiteItems={getMissingTokenSiteItems(route.id)}
                     missingTokenGroupItems={getMissingTokenGroupItems(route.id)}
@@ -1896,6 +1915,7 @@ export default function TokenRoutes() {
               onSaveToken={stableChannelTokenSave}
               onDeleteChannel={stableDeleteChannel}
               onToggleChannelEnabled={stableToggleChannelEnabled}
+              onMultiplierChange={stableMultiplierChange}
               onChannelDragEnd={stableChannelDragEnd}
               missingTokenSiteItems={EMPTY_MISSING_ITEMS}
               missingTokenGroupItems={EMPTY_MISSING_GROUP_ITEMS}
@@ -1935,6 +1955,7 @@ export default function TokenRoutes() {
                   onSaveToken={stableChannelTokenSave}
                   onDeleteChannel={stableDeleteChannel}
                   onToggleChannelEnabled={stableToggleChannelEnabled}
+                  onMultiplierChange={stableMultiplierChange}
                   onChannelDragEnd={stableChannelDragEnd}
                   missingTokenSiteItems={getMissingTokenSiteItems(route.id)}
                   missingTokenGroupItems={getMissingTokenGroupItems(route.id)}

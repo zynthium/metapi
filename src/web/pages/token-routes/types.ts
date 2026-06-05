@@ -6,7 +6,7 @@ export type { RouteDecision, RouteDecisionCandidate, RouteMode } from '../../../
 export type RouteSortBy = 'modelPattern' | 'channelCount';
 export type RouteSortDir = 'asc' | 'desc';
 export type GroupFilter = null | '__all__' | number;
-export type RouteRoutingStrategy = 'weighted' | 'round_robin' | 'stable_first';
+export type RouteRoutingStrategy = 'weighted' | 'round_robin' | 'stable_first' | 'lowest_multiplier';
 export type OAuthRouteUnitStrategy = 'round_robin' | 'stick_until_unavailable';
 export type RouteRowKind = 'persisted' | 'zero_channel';
 export type RouteChannelDraft = {
@@ -37,6 +37,7 @@ export type RouteChannel = {
   sourceModel?: string | null;
   priority: number;
   weight: number;
+  multiplier?: number | null;
   enabled: boolean;
   manualOverride: boolean;
   successCount: number;
@@ -162,6 +163,7 @@ export type SortableChannelRowProps = {
   onSaveToken: () => void;
   onDeleteChannel: () => void;
   onToggleEnabled: (enabled: boolean) => void;
+  onMultiplierChange?: (channelId: number, multiplier: number) => void;
   onSiteBlockModel?: () => void;
 };
 
