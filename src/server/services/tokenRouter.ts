@@ -1996,7 +1996,9 @@ export class TokenRouter {
       `命中路由：${match.route.modelPattern}`,
       routeStrategy === 'round_robin'
         ? '路由策略：轮询'
-        : (routeStrategy === 'stable_first' ? '路由策略：稳定优先' : '路由策略：按权重随机'),
+        : (routeStrategy === 'stable_first'
+          ? '路由策略：稳定优先'
+          : (routeStrategy === 'lowest_multiplier' ? '路由策略：最低倍率' : '路由策略：按权重随机')),
     ];
     if (requestedByDisplayName) {
       summary.push(`按显示名命中：${normalizeRouteDisplayName(match.route.displayName)}`);
@@ -2289,6 +2291,97 @@ export class TokenRouter {
         modelPattern: match.route.modelPattern,
         selectedChannelId: weighted.selected.channel.id,
         selectedAccountId: weighted.selected.account.id,
+        selectedLabel,
+        summary,
+        candidates,
+      };
+    }
+
+    if (routeStrategy === 'lowest_multiplier') {
+      const breakerFiltered = filterSiteRuntimeBrokenCandidatesByModel(available, runtimeModelResolver, nowMs);
+      if (breakerFiltered.avoided.length > 0) {
+        for (const item of breakerFiltered.avoided) {
+          const target = candidateMap.get(item.candidate.channel.id);
+          if (!target) continue;
+          target.reason = item.reason;
+        }
+        const breakerSummaryLabel = breakerFiltered.avoided.some((item) => item.reason.includes('模型熔断'))
+          ? '运行时熔断避让'
+          : '站点熔断避让';
+        summary.push(`${breakerSummaryLabel} ${breakerFiltered.avoided.length}`);
+      }
+
+      const sorted = [...breakerFiltered.candidates].sort((a, b) => {
+        const multA = a.channel.multiplier ?? 1.0;
+        const multB = b.channel.multiplier ?? 1.0;
+        if (multA !== multB) return multA - multB;
+        return (a.channel.priority ?? 0) - (b.channel.priority ?? 0);
+      });
+
+      if (sorted.length === 0) {
+        summary.push('没有可用通道（全部被禁用、站点不可用、冷却或令牌不可用）');
+        return {
+          requestedModel,
+          actualModel: mappedModel,
+          matched: true,
+          routeId: match.route.id,
+          modelPattern: match.route.modelPattern,
+          summary,
+          candidates,
+        };
+      }
+
+      let selected: RouteChannelCandidate | null = null;
+      for (let index = 0; index < sorted.length; index += 1) {
+        const target = candidateMap.get(sorted[index].channel.id);
+        if (!target || !target.eligible) continue;
+        target.probability = index === 0 ? 100 : 0;
+        const mult = sorted[index].channel.multiplier ?? 1.0;
+        target.reason = index === 0
+          ? `最低倍率命中（multiplier=${mult}，共 ${sorted.length} 个可用通道）`
+          : `倍率 ${mult}，高于选中的 ${sorted[0]?.channel.multiplier ?? 1.0}`;
+        if (index === 0) {
+          selected = sorted[index];
+        }
+      }
+
+      if (!selected) {
+        summary.push('本次未选出通道');
+        return {
+          requestedModel,
+          actualModel: mappedModel,
+          matched: true,
+          routeId: match.route.id,
+          modelPattern: match.route.modelPattern,
+          summary,
+          candidates,
+        };
+      }
+
+      const selectedChannel = candidateMap.get(selected.channel.id);
+      const selectedLabel = selectedChannel
+        ? `${selectedChannel.username} @ ${selectedChannel.siteName} / ${selectedChannel.tokenName}`
+        : `channel-${selected.channel.id}`;
+      const actualModel = resolveActualModelForSelectedChannel(
+        requestedModel,
+        match.route,
+        mappedModel,
+        selected.channel.sourceModel,
+      );
+      summary.push(`最低倍率：可用 ${sorted.length}，按 multiplier 升序`);
+      summary.push(`最终选择：${selectedLabel}（multiplier=${selected.channel.multiplier ?? 1.0}）`);
+      if (actualModel !== mappedModel) {
+        summary.push(`实际转发模型：${actualModel}`);
+      }
+
+      return {
+        requestedModel,
+        actualModel,
+        matched: true,
+        routeId: match.route.id,
+        modelPattern: match.route.modelPattern,
+        selectedChannelId: selected.channel.id,
+        selectedAccountId: selected.account.id,
         selectedLabel,
         summary,
         candidates,

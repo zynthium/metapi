@@ -35,6 +35,7 @@ import {
   validateGeminiCliOauthConnection,
 } from './platformDiscoveryRegistry.js';
 import { probeRuntimeModel, type RuntimeModelProbeStatus } from './runtimeModelProbe.js';
+import { fetchGroupRatioForSite } from './modelPricingService.js';
 
 const API_TOKEN_DISCOVERY_TIMEOUT_MS = 8_000;
 const MODEL_DISCOVERY_TIMEOUT_MS = 12_000;
@@ -1387,6 +1388,8 @@ export async function rebuildTokenRoutesFromAvailability() {
     accountId: number;
     tokenId: number | null;
     oauthRouteUnitId: number | null;
+    tokenGroup: string | null;
+    siteId: number;
   }>>();
   const buildCandidateKey = (input: {
     accountId: number;
@@ -1408,6 +1411,7 @@ export async function rebuildTokenRoutesFromAvailability() {
     tokenId: number | null,
     siteId: number,
     oauthRouteUnitId: number | null = null,
+    tokenGroup: string | null = null,
   ) => {
     const modelName = (modelNameRaw || '').trim();
     if (!modelName) return;
@@ -1415,12 +1419,19 @@ export async function rebuildTokenRoutesFromAvailability() {
     if (isModelDisabledForSite(siteId, modelName)) return;
     if (blockedBrandRules.length > 0 && isModelBlockedByBrand(modelName, blockedBrandRules)) return;
     if (!modelCandidates.has(modelName)) modelCandidates.set(modelName, new Map());
-    const candidate = { accountId, tokenId, oauthRouteUnitId };
+    const candidate = { accountId, tokenId, oauthRouteUnitId, tokenGroup, siteId };
     modelCandidates.get(modelName)!.set(buildCandidateKey(candidate), candidate);
   };
 
   for (const row of usableTokenRows) {
-    addModelCandidate(row.token_model_availability.modelName, row.accounts.id, row.account_tokens.id, row.accounts.siteId);
+    addModelCandidate(
+      row.token_model_availability.modelName,
+      row.accounts.id,
+      row.account_tokens.id,
+      row.accounts.siteId,
+      null,
+      row.account_tokens.tokenGroup,
+    );
   }
 
   for (const row of accountRows) {
@@ -1437,6 +1448,34 @@ export async function rebuildTokenRoutesFromAvailability() {
       continue;
     }
     addModelCandidate(row.model_availability.modelName, row.accounts.id, null, row.accounts.siteId);
+  }
+
+  const siteIdsWithTokenGroup = new Set<number>();
+  for (const candidateMap of modelCandidates.values()) {
+    for (const candidate of candidateMap.values()) {
+      if (candidate.tokenGroup && candidate.siteId) {
+        siteIdsWithTokenGroup.add(candidate.siteId);
+      }
+    }
+  }
+
+  const siteGroupRatioBySiteId = new Map<number, Record<string, number>>();
+  if (siteIdsWithTokenGroup.size > 0) {
+    const allSites = await db.select().from(schema.sites).all();
+    const siteById = new Map(allSites.map((s) => [s.id, s]));
+
+    await Promise.all(
+      Array.from(siteIdsWithTokenGroup).map(async (siteId) => {
+        const site = siteById.get(siteId);
+        if (!site || !site.enabled) return;
+        try {
+          const groupRatio = await fetchGroupRatioForSite(site);
+          if (groupRatio) {
+            siteGroupRatioBySiteId.set(siteId, groupRatio);
+          }
+        } catch {}
+      }),
+    );
   }
 
   const routes = await db.select().from(schema.tokenRoutes).all();
@@ -1470,6 +1509,14 @@ export async function rebuildTokenRoutesFromAvailability() {
       const exists = routeChannels.some((channel) => buildChannelKey(channel) === candidateKey);
       if (exists) continue;
 
+      let channelMultiplier = 1.0;
+      if (candidate.tokenGroup && candidate.siteId) {
+        const siteGroupRatio = siteGroupRatioBySiteId.get(candidate.siteId);
+        if (siteGroupRatio && candidate.tokenGroup in siteGroupRatio) {
+          channelMultiplier = siteGroupRatio[candidate.tokenGroup];
+        }
+      }
+
       const inserted = await db.insert(schema.routeChannels).values({
         routeId: route.id,
         accountId: candidate.accountId,
@@ -1477,6 +1524,7 @@ export async function rebuildTokenRoutesFromAvailability() {
         oauthRouteUnitId: candidate.oauthRouteUnitId,
         priority: 0,
         weight: 10,
+        multiplier: channelMultiplier,
         enabled: true,
         manualOverride: false,
       }).run();

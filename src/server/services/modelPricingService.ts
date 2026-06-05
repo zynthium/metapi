@@ -837,6 +837,49 @@ async function fetchJsonViaNewApiShield(url: string, token: string): Promise<unk
   return null;
 }
 
+export async function fetchGroupRatioForSite(
+  site: { id: number; url: string; platform?: string | null },
+  accountToken?: string | null,
+): Promise<Record<string, number> | null> {
+  const baseUrl = normalizeUrl(site.url);
+  const normalizedPlatform = (site.platform || '').trim().toLowerCase();
+  const isOneHub = normalizedPlatform === 'one-hub' || normalizedPlatform === 'done-hub';
+
+  try {
+    if (isOneHub) {
+      const headers: Record<string, string> = {};
+      if (accountToken) headers.Authorization = `Bearer ${accountToken}`;
+      const groupPayload = await fetchJson(`${baseUrl}/api/user_group_map`, { headers });
+      const groupMap = unwrapPayload(groupPayload);
+      const groupRatioSource: Record<string, number> = {};
+      if (groupMap && typeof groupMap === 'object') {
+        for (const [key, group] of Object.entries(groupMap as Record<string, any>)) {
+          groupRatioSource[key] = toNumber(group?.ratio, 1);
+        }
+      }
+      return normalizeGroupRatio(groupRatioSource);
+    }
+
+    const shouldTryShieldCookie = !!accountToken && (normalizedPlatform === 'anyrouter' || accountToken.includes('='));
+    if (shouldTryShieldCookie) {
+      const payload = await fetchJsonViaNewApiShield(`${baseUrl}/api/pricing`, accountToken!);
+      if (payload && typeof payload === 'object' && 'group_ratio' in (payload as any)) {
+        return normalizeGroupRatio((payload as any).group_ratio);
+      }
+    }
+
+    const headers: Record<string, string> = {};
+    if (accountToken) headers.Authorization = `Bearer ${accountToken}`;
+    const payload = await fetchJson(`${baseUrl}/api/pricing`, { headers });
+    if (payload && typeof payload === 'object' && 'group_ratio' in (payload as any)) {
+      return normalizeGroupRatio((payload as any).group_ratio);
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export async function buildProxyBillingDetails(input: EstimateProxyCostInput): Promise<ProxyBillingDetails | null> {
   const promptTokens = toPositiveInt(input.promptTokens);
   const completionTokens = toPositiveInt(input.completionTokens);
