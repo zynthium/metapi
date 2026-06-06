@@ -2,9 +2,8 @@ import cron from 'node-cron';
 import { eq } from 'drizzle-orm';
 import { config } from '../config.js';
 import { db, schema } from '../db/index.js';
-import { refreshAllBalances } from './balanceService.js';
 import { checkinAll } from './checkinService.js';
-import * as routeRefreshWorkflow from './routeRefreshWorkflow.js';
+import { runPeriodicMaintenance } from './periodicMaintenanceService.js';
 import { sendNotification } from './notifyService.js';
 import { buildDailySummaryNotification, collectDailySummaryMetrics } from './dailySummaryService.js';
 import { cleanupConfiguredLogs } from './logCleanupService.js';
@@ -160,13 +159,14 @@ function startCheckinSchedule() {
 
 function createBalanceTask(cronExpr: string) {
   return cron.schedule(cronExpr, async () => {
-    console.log(`[Scheduler] Refreshing balances at ${new Date().toISOString()}`);
+    console.log(`[Scheduler] Running periodic maintenance at ${new Date().toISOString()}`);
     try {
-      await refreshAllBalances();
-      await routeRefreshWorkflow.refreshModelsAndRebuildRoutes();
-      console.log('[Scheduler] Balance refresh complete');
+      const result = await runPeriodicMaintenance();
+      console.log(
+        `[Scheduler] Periodic maintenance complete: balances ${result.summary.balances.refreshed}/${result.summary.balances.total}, token sync ${result.summary.tokenSync.synced}/${result.summary.tokenSync.total}, decision snapshots exact=${result.summary.routeDecisionSnapshots.exactModelCount}, wildcard=${result.summary.routeDecisionSnapshots.wildcardRouteCount}`,
+      );
     } catch (err) {
-      console.error('[Scheduler] Balance refresh error:', err);
+      console.error('[Scheduler] Periodic maintenance error:', err);
     }
   });
 }
@@ -256,7 +256,7 @@ export async function startScheduler() {
   logCleanupTask = createLogCleanupTask(activeLogCleanupCron);
 
   console.log(`[Scheduler] Check-in schedule: ${config.checkinScheduleMode} (${config.checkinScheduleMode === 'cron' ? activeCheckinCron : `${config.checkinIntervalHours}h`})`);
-  console.log(`[Scheduler] Balance refresh cron: ${activeBalanceCron}`);
+  console.log(`[Scheduler] Periodic maintenance cron: ${activeBalanceCron}`);
   console.log(`[Scheduler] Daily summary cron: ${activeDailySummaryCron}`);
   console.log(
     `[Scheduler] Log cleanup cron: ${activeLogCleanupCron} (configured=${config.logCleanupConfigured}, usage=${activeLogCleanupUsageLogsEnabled}, program=${activeLogCleanupProgramLogsEnabled}, retentionDays=${activeLogCleanupRetentionDays})`,

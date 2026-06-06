@@ -6,6 +6,9 @@ const scheduleMock = vi.fn(() => ({
 }));
 const validateMock = vi.fn(() => true);
 const allMock = vi.fn();
+const runPeriodicMaintenanceMock = vi.fn();
+const refreshAllBalancesMock = vi.fn();
+const refreshModelsAndRebuildRoutesMock = vi.fn();
 
 vi.mock('node-cron', () => ({
   default: {
@@ -39,6 +42,18 @@ vi.mock('./checkinService.js', () => ({
   checkinAll: (...args: unknown[]) => allMock(...args),
 }));
 
+vi.mock('./periodicMaintenanceService.js', () => ({
+  runPeriodicMaintenance: (...args: unknown[]) => runPeriodicMaintenanceMock(...args),
+}));
+
+vi.mock('./balanceService.js', () => ({
+  refreshAllBalances: (...args: unknown[]) => refreshAllBalancesMock(...args),
+}));
+
+vi.mock('./routeRefreshWorkflow.js', () => ({
+  refreshModelsAndRebuildRoutes: (...args: unknown[]) => refreshModelsAndRebuildRoutesMock(...args),
+}));
+
 describe('checkinScheduler', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -46,6 +61,28 @@ describe('checkinScheduler', () => {
     scheduleMock.mockClear();
     validateMock.mockClear();
     allMock.mockReset();
+    runPeriodicMaintenanceMock.mockReset();
+    refreshAllBalancesMock.mockReset();
+    refreshModelsAndRebuildRoutesMock.mockReset();
+    runPeriodicMaintenanceMock.mockResolvedValue({
+      summary: {
+        balances: {
+          total: 0,
+          refreshed: 0,
+          failed: 0,
+        },
+        tokenSync: {
+          total: 0,
+          synced: 0,
+          skipped: 0,
+          failed: 0,
+        },
+        routeDecisionSnapshots: {
+          exactModelCount: 0,
+          wildcardRouteCount: 0,
+        },
+      },
+    });
   });
 
   afterEach(async () => {
@@ -91,5 +128,19 @@ describe('checkinScheduler', () => {
       { id: 2, lastCheckinAt: '2026-03-20T05:59:59.000Z' },
       { id: 3, lastCheckinAt: '2026-03-20T06:30:00.000Z' },
     ], 6, now)).toEqual([1, 2]);
+  });
+
+  it('runs periodic maintenance from the balance refresh schedule', async () => {
+    const scheduler = await import('./checkinScheduler.js');
+
+    scheduler.updateBalanceRefreshCron('*/5 * * * *');
+    const scheduledCallback = scheduleMock.mock.calls.at(-1)?.[1] as (() => Promise<void>) | undefined;
+    expect(scheduledCallback).toBeTypeOf('function');
+
+    await scheduledCallback!();
+
+    expect(runPeriodicMaintenanceMock).toHaveBeenCalledTimes(1);
+    expect(refreshAllBalancesMock).not.toHaveBeenCalled();
+    expect(refreshModelsAndRebuildRoutesMock).not.toHaveBeenCalled();
   });
 });
