@@ -23,7 +23,7 @@ export function getRouteRoutingStrategyDescription(value?: RouteRoutingStrategy 
     return tr('先避开最近失败或不健康站点，再在稳定池里按顺序轮询；P 值表示轮询顺位');
   }
   if (strategy === 'lowest_multiplier') {
-    return tr('始终选择倍率最低的通道；连续失败 3 次后自动切换到次低倍率通道');
+    return tr('始终选择有效成本最低的通道；通道成本覆盖仅在非 1 时生效，连续失败 3 次后自动切换到次低成本通道');
   }
   return tr('P 值是硬优先级，只会在当前最高可用优先级内结合权重、成本和健康度随机选择');
 }
@@ -37,7 +37,7 @@ export function getRouteRoutingStrategyHint(value?: RouteRoutingStrategy | null)
     return tr('当前策略下，稳定站点会按 P 顺序轮换；不稳定站点会被自动降权或临时避让。');
   }
   if (strategy === 'lowest_multiplier') {
-    return tr('选择通道时忽略 P 值和已尝试记录，仅依据倍率和连续失败次数作出选择。');
+    return tr('选择通道时忽略 P 值和已尝试记录；默认继承账号/令牌/模型成本，非 1 的通道成本覆盖会优先生效。');
   }
   return tr('只要更高优先级还有可用通道，后面的通道本次就不会参与选择。');
 }

@@ -1106,9 +1106,9 @@ export default function TokenRoutes() {
     setUpdatingChannel((prev) => ({ ...prev, [channelId]: true }));
     try {
       await api.updateChannel(channelId, { multiplier });
-      toast.success('通道倍率已更新');
+      toast.success(multiplier === 1 ? '已恢复自动成本' : '通道成本覆盖已更新');
     } catch (e: any) {
-      toast.error(e.message || '更新通道倍率失败');
+      toast.error(e.message || '更新通道成本覆盖失败');
     } finally {
       setUpdatingChannel((prev) => ({ ...prev, [channelId]: false }));
     }

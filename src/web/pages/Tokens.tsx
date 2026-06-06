@@ -17,6 +17,7 @@ import { MobileCard, MobileField } from '../components/MobileCard.js';
 import { useIsMobile } from '../components/useIsMobile.js';
 import DeleteConfirmModal from '../components/DeleteConfirmModal.js';
 import { clearFocusParams, readFocusTokenId } from './helpers/navigationFocus.js';
+import { formatMultiplier } from './helpers/multiplierFormat.js';
 import { shouldIgnoreRowSelectionClick } from './helpers/rowSelection.js';
 import { tr } from '../i18n.js';
 
@@ -1227,7 +1228,7 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
                     <MobileField label="分组" value={token.tokenGroup || 'default'} />
                     <MobileField
                       label="倍率"
-                      value={token.groupMultiplier != null ? `${token.groupMultiplier.toFixed(2)}x` : '-'}
+                      value={formatMultiplier(token.groupMultiplier)}
                     />
                     <MobileField
                       label="状态"
@@ -1379,7 +1380,7 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
                     </td>
                     <td>{token.account?.username || `account-${token.accountId}`}</td>
                     <td>{token.tokenGroup || 'default'}</td>
-                    <td>{token.groupMultiplier != null ? `${token.groupMultiplier.toFixed(2)}x` : '-'}</td>
+                    <td>{formatMultiplier(token.groupMultiplier)}</td>
                     <td>
                       {isPending ? (
                         <span className="badge badge-warning" style={{ fontSize: 11 }}>待补全</span>

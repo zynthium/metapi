@@ -318,16 +318,22 @@ export function SortableChannelRow({
 
                 {onMultiplierChange ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <span style={{ fontSize: 11, color: 'var(--color-text-muted)', whiteSpace: 'nowrap' }}>
-                      倍率
+                    <span
+                      style={{ fontSize: 11, color: 'var(--color-text-muted)', whiteSpace: 'nowrap' }}
+                      title="留空或 1 表示自动继承账号/令牌/模型的有效成本；非 1 时作为手工覆盖"
+                    >
+                      成本覆盖
                     </span>
                     <input
                       type="number"
-                      step="0.1"
+                      step="0.001"
                       min="0"
-                      defaultValue={channel.multiplier ?? 1.0}
+                      placeholder="自动"
+                      defaultValue={channel.multiplier && channel.multiplier !== 1 ? channel.multiplier : ''}
+                      title="留空或 1 表示自动继承有效成本"
                       onBlur={(e) => {
-                        const val = Number.parseFloat(e.target.value);
+                        const raw = e.target.value.trim();
+                        const val = raw ? Number.parseFloat(raw) : 1;
                         if (Number.isFinite(val) && val >= 0) {
                           onMultiplierChange(channel.id, val);
                         }
@@ -598,16 +604,22 @@ export function SortableChannelRow({
 
           {onMultiplierChange ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ fontSize: 11, color: 'var(--color-text-muted)', whiteSpace: 'nowrap' }}>
-                倍率
+              <span
+                style={{ fontSize: 11, color: 'var(--color-text-muted)', whiteSpace: 'nowrap' }}
+                title="留空或 1 表示自动继承账号/令牌/模型的有效成本；非 1 时作为手工覆盖"
+              >
+                成本覆盖
               </span>
               <input
                 type="number"
-                step="0.1"
+                step="0.001"
                 min="0"
-                defaultValue={channel.multiplier ?? 1.0}
+                placeholder="自动"
+                defaultValue={channel.multiplier && channel.multiplier !== 1 ? channel.multiplier : ''}
+                title="留空或 1 表示自动继承有效成本"
                 onBlur={(e) => {
-                  const val = Number.parseFloat(e.target.value);
+                  const raw = e.target.value.trim();
+                  const val = raw ? Number.parseFloat(raw) : 1;
                   if (Number.isFinite(val) && val >= 0) {
                     onMultiplierChange(channel.id, val);
                   }

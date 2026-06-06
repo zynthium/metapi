@@ -934,6 +934,7 @@ describe('RouteCard', () => {
       onCreateTokenForMissing: vi.fn(),
       onAddChannel: vi.fn(),
       onSiteBlockModel: vi.fn(),
+      onMultiplierChange: vi.fn(),
       onToggleSourceGroup: vi.fn(),
     };
     const candidateView = { routeCandidates: [], accountOptions: [], tokenOptionsByAccountId: {} };
@@ -969,6 +970,7 @@ describe('RouteCard', () => {
         onCreateTokenForMissing={callbacks.onCreateTokenForMissing}
         onAddChannel={callbacks.onAddChannel}
         onSiteBlockModel={callbacks.onSiteBlockModel}
+        onMultiplierChange={callbacks.onMultiplierChange}
         expandedSourceGroupMap={{}}
         onToggleSourceGroup={callbacks.onToggleSourceGroup}
       />
@@ -1014,6 +1016,7 @@ describe('RouteCard', () => {
       onCreateTokenForMissing: vi.fn(),
       onAddChannel: vi.fn(),
       onSiteBlockModel: vi.fn(),
+      onMultiplierChange: vi.fn(),
       onToggleSourceGroup: vi.fn(),
     };
     const callbacksB = {
@@ -1030,6 +1033,7 @@ describe('RouteCard', () => {
       onCreateTokenForMissing: vi.fn(),
       onAddChannel: vi.fn(),
       onSiteBlockModel: vi.fn(),
+      onMultiplierChange: vi.fn(),
       onToggleSourceGroup: vi.fn(),
     };
     const candidateView = { routeCandidates: [], accountOptions: [], tokenOptionsByAccountId: {} };
@@ -1065,6 +1069,7 @@ describe('RouteCard', () => {
         onCreateTokenForMissing={callbacks.onCreateTokenForMissing}
         onAddChannel={callbacks.onAddChannel}
         onSiteBlockModel={callbacks.onSiteBlockModel}
+        onMultiplierChange={callbacks.onMultiplierChange}
         expandedSourceGroupMap={{}}
         onToggleSourceGroup={callbacks.onToggleSourceGroup}
       />

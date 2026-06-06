@@ -26,6 +26,7 @@ import {
   clearFocusParams,
   readFocusAccountIntent,
 } from "./helpers/navigationFocus.js";
+import { formatMultiplier } from "./helpers/multiplierFormat.js";
 import { TokensPanel } from "./Tokens.js";
 import { tr } from "../i18n.js";
 import {
@@ -2907,6 +2908,12 @@ export default function Accounts() {
                             </div>
                           }
                         />
+                        {activeSegment === "apikey" ? (
+                          <MobileField
+                            label="倍率/单位成本"
+                            value={formatMultiplier(a.unitCost, "自动")}
+                          />
+                        ) : null}
                         {isExpanded ? (
                           <div className="mobile-card-extra">
                             <MobileField
@@ -3099,6 +3106,7 @@ export default function Accounts() {
                       <th>连接名称</th>
                       <th>站点</th>
                       <th>运行健康状态</th>
+                      {activeSegment === "apikey" ? <th>倍率/单位成本</th> : null}
                       <th>余额</th>
                       <th>已用</th>
                       <th>签到</th>
@@ -3213,6 +3221,17 @@ export default function Accounts() {
                               );
                             })()}
                           </td>
+                          {activeSegment === "apikey" ? (
+                            <td style={{ fontVariantNumeric: "tabular-nums" }}>
+                              <span
+                                className="badge badge-muted"
+                                style={{ fontSize: 11 }}
+                                data-tooltip="API Key 连接的单位成本，用于成本权重；为空时按观测成本、模型价格或默认值自动计算"
+                              >
+                                {formatMultiplier(a.unitCost, "自动")}
+                              </span>
+                            </td>
+                          ) : null}
                           <td style={{ fontVariantNumeric: "tabular-nums" }}>
                             <div
                               style={{

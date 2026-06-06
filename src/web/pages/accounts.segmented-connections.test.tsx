@@ -112,6 +112,46 @@ describe('Accounts segmented connections view', () => {
     }
   });
 
+  it('shows configured unit cost as multiplier in the apikey segment list', async () => {
+    apiMock.getAccounts.mockResolvedValue([
+      {
+        id: 2,
+        username: '',
+        accessToken: '',
+        apiToken: 'sk-apikey',
+        status: 'active',
+        credentialMode: 'apikey',
+        unitCost: 0.25,
+        capabilities: { canCheckin: false, canRefreshBalance: false, proxyOnly: true },
+        site: { id: 11, name: 'Key Site', platform: 'new-api', status: 'active', url: 'https://key.example.com' },
+      },
+    ]);
+    apiMock.getSites.mockResolvedValue([
+      { id: 11, name: 'Key Site', platform: 'new-api', status: 'active' },
+    ]);
+    apiMock.getAccountTokens.mockResolvedValue([]);
+
+    let root!: WebTestRenderer;
+    try {
+      await act(async () => {
+        root = create(
+          <MemoryRouter initialEntries={['/accounts?segment=apikey']}>
+            <ToastProvider>
+              <Accounts />
+            </ToastProvider>
+          </MemoryRouter>,
+        );
+      });
+      await flushMicrotasks();
+
+      const text = collectText(root.root);
+      expect(text).toContain('倍率/单位成本');
+      expect(text).toContain('0.25x');
+    } finally {
+      root?.unmount();
+    }
+  });
+
   it('uses existing-site guidance instead of asking to add a site when the segment is empty but sites exist', async () => {
     apiMock.getAccounts.mockResolvedValue([]);
     apiMock.getSites.mockResolvedValue([

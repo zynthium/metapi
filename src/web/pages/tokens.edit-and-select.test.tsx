@@ -116,6 +116,7 @@ describe('Tokens edit modal and row selection', () => {
         valueStatus: 'ready',
         enabled: true,
         isDefault: false,
+        groupMultiplier: 0.001,
         updatedAt: '2026-03-07 10:00:00',
         accountId: 1,
         account: { username: 'session-user' },
@@ -165,6 +166,7 @@ describe('Tokens edit modal and row selection', () => {
       await flushMicrotasks();
 
       const rendered = JSON.stringify(root.toJSON());
+      expect(rendered).toContain('0.001x');
       expect(rendered).toContain('编辑令牌');
       expect(rendered).toContain('保存修改');
       expect(rendered).toContain('sk-focus-real');
