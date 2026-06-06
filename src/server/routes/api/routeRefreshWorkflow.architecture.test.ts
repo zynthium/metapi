@@ -24,6 +24,18 @@ function expectCallsRebuildRoutesOnly(source: string): void {
   expect(source).toMatch(/\brouteRefreshWorkflow\.rebuildRoutesOnly\s*\(/);
 }
 
+function expectImportsPeriodicMaintenance(source: string): void {
+  expect(source).toMatch(
+    /import\s*\{\s*runPeriodicMaintenance\s*\}\s*from\s*['"][^'"]*periodicMaintenanceService\.js['"]/m,
+  );
+}
+
+function expectImportsConnectionMaintenance(source: string): void {
+  expect(source).toMatch(
+    /import\s*\{\s*runConnectionMaintenance\s*\}\s*from\s*['"][^'"]*connectionMaintenanceService\.js['"]/m,
+  );
+}
+
 describe('route refresh workflow architecture boundaries', () => {
   it('keeps api controllers on the shared route refresh workflow instead of modelService', () => {
     const tokensSource = readSource('./tokens.ts');
@@ -47,12 +59,20 @@ describe('route refresh workflow architecture boundaries', () => {
     const searchSource = readSource('../proxy/search.ts');
     const videosSource = readSource('../proxy/videos.ts');
     const schedulerSource = readSource('../../services/checkinScheduler.ts');
+    const periodicMaintenanceSource = readSource('../../services/periodicMaintenanceService.ts');
+    const connectionMaintenanceSource = readSource('../../services/connectionMaintenanceService.ts');
     const oauthServiceSource = readSource('../../services/oauth/service.ts');
     const sharedSurfaceSource = readSource('../../proxy-core/surfaces/sharedSurface.ts');
     const geminiSurfaceSource = readSource('../../proxy-core/surfaces/geminiSurface.ts');
     const channelSelectionSource = readSource('../../proxy-core/channelSelection.ts');
 
-    for (const source of [schedulerSource, oauthServiceSource, channelSelectionSource]) {
+    expectImportsPeriodicMaintenance(schedulerSource);
+    expectImportsConnectionMaintenance(periodicMaintenanceSource);
+    expectImportsRouteRefreshWorkflow(connectionMaintenanceSource);
+    expectNoDirectModelServiceRouteRefresh(schedulerSource);
+    expectNoDirectModelServiceRouteRefresh(periodicMaintenanceSource);
+
+    for (const source of [connectionMaintenanceSource, oauthServiceSource, channelSelectionSource]) {
       expectImportsRouteRefreshWorkflow(source);
       expectNoDirectModelServiceRouteRefresh(source);
     }
