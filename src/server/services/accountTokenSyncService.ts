@@ -9,6 +9,7 @@ import {
 import { type ModelRefreshResult } from './modelService.js';
 import { getAdapter } from './platforms/index.js';
 import { withAccountProxyOverride } from './siteProxy.js';
+import { runMaintenanceWithRetry } from './maintenanceRetry.js';
 
 export type AccountWithSiteRow = {
   accounts: typeof schema.accounts.$inferSelect;
@@ -275,18 +276,59 @@ export async function appendTokenSyncEvent(result: SyncExecutionResult) {
   } catch {}
 }
 
-export async function syncAllAccountTokens() {
+function buildFailedSyncResultForRow(row: AccountWithSiteRow, message: string): SyncExecutionResult {
+  const accountId = row.accounts.id;
+  return {
+    accountId,
+    accountName: row.accounts.username || `account-${accountId}`,
+    accountStatus: row.accounts.status,
+    siteId: row.sites.id,
+    siteName: row.sites.name,
+    siteStatus: row.sites.status,
+    status: 'failed',
+    reason: 'sync_error',
+    message,
+    synced: false,
+    created: 0,
+    updated: 0,
+    total: 0,
+    defaultTokenId: null,
+  };
+}
+
+export async function syncAllAccountTokens(options?: {
+  retryAttempts?: number;
+  attemptTimeoutMs?: number;
+  concurrency?: number;
+}) {
   const rows = await db.select().from(schema.accounts)
     .innerJoin(schema.sites, eq(schema.accounts.siteId, schema.sites.id))
     .where(eq(schema.accounts.status, 'active'))
     .all();
 
   const results: SyncExecutionResult[] = [];
-  for (let offset = 0; offset < rows.length; offset += ACCOUNT_TOKEN_SYNC_ALL_BATCH_SIZE) {
-    const batch = rows.slice(offset, offset + ACCOUNT_TOKEN_SYNC_ALL_BATCH_SIZE);
+  const retryAttempts = Math.max(1, Math.trunc(options?.retryAttempts || 5));
+  const attemptTimeoutMs = Math.max(1_000, Math.trunc(options?.attemptTimeoutMs || TOKEN_SYNC_TIMEOUT_MS));
+  const batchSize = Math.max(1, Math.trunc(options?.concurrency || ACCOUNT_TOKEN_SYNC_ALL_BATCH_SIZE));
+  for (let offset = 0; offset < rows.length; offset += batchSize) {
+    const batch = rows.slice(offset, offset + batchSize);
     const batchResults = await Promise.all(
       batch.map(async (row) => {
-        const result = await syncAccountTokensForRow(row);
+        const retryResult = await runMaintenanceWithRetry({
+          label: `account-token-sync:${row.accounts.id}`,
+          attempts: retryAttempts,
+          attemptTimeoutMs,
+          run: async () => {
+            const result = await syncAccountTokensForRow(row);
+            if (result.status === 'failed') {
+              throw new Error(result.message || result.reason || 'token sync failed');
+            }
+            return result;
+          },
+        });
+        const result = retryResult.ok
+          ? retryResult.value
+          : buildFailedSyncResultForRow(row, retryResult.error);
         void appendTokenSyncEvent(result);
         return result;
       }),

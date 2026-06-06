@@ -157,16 +157,48 @@ function startCheckinSchedule() {
   checkinTask = createCheckinTask(config.checkinCron);
 }
 
+function summarizeConnectionMaintenance(result: Awaited<ReturnType<typeof runPeriodicMaintenance>>): string {
+  if (result.skipped) {
+    return `skipped (${result.reason || 'unknown'})`;
+  }
+
+  const summary = result.summary || {};
+  const siteAccess = summary.siteAccess as { total?: number; reachable?: number; failed?: number } | undefined;
+  const accountHealthWrapper = summary.accountHealth as { summary?: Record<string, number> } | undefined;
+  const accountHealth = accountHealthWrapper?.summary || (summary.accountHealth as Record<string, number> | undefined);
+  const tokenWrapper = summary.tokens as { summary?: Record<string, number> } | undefined;
+  const tokens = tokenWrapper?.summary || (summary.tokens as Record<string, number> | undefined);
+  const groupRatios = summary.groupRatios as { total?: number; synced?: number; failed?: number } | undefined;
+  const snapshots = summary.routeDecisionSnapshots as { exactModelCount?: number; wildcardRouteCount?: number } | undefined;
+  const parts: string[] = [];
+
+  if (siteAccess) {
+    parts.push(`site access ${siteAccess.reachable ?? 0}/${siteAccess.total ?? 0}`);
+  }
+  if (accountHealth) {
+    parts.push(`account health ${(accountHealth.healthy ?? 0)}/${accountHealth.total ?? 0}`);
+  }
+  if (tokens) {
+    parts.push(`token sync ${(tokens.synced ?? 0)}/${tokens.total ?? 0}`);
+  }
+  if (groupRatios) {
+    parts.push(`group ratios ${groupRatios.synced ?? 0}/${groupRatios.total ?? 0}`);
+  }
+  if (snapshots) {
+    parts.push(`decision snapshots exact=${snapshots.exactModelCount ?? 0}, wildcard=${snapshots.wildcardRouteCount ?? 0}`);
+  }
+
+  return parts.length > 0 ? parts.join(', ') : 'completed';
+}
+
 function createBalanceTask(cronExpr: string) {
   return cron.schedule(cronExpr, async () => {
-    console.log(`[Scheduler] Running periodic maintenance at ${new Date().toISOString()}`);
+    console.log(`[Scheduler] Running connection maintenance at ${new Date().toISOString()}`);
     try {
       const result = await runPeriodicMaintenance();
-      console.log(
-        `[Scheduler] Periodic maintenance complete: balances ${result.summary.balances.refreshed}/${result.summary.balances.total}, token sync ${result.summary.tokenSync.synced}/${result.summary.tokenSync.total}, decision snapshots exact=${result.summary.routeDecisionSnapshots.exactModelCount}, wildcard=${result.summary.routeDecisionSnapshots.wildcardRouteCount}`,
-      );
+      console.log(`[Scheduler] Connection maintenance complete: ${summarizeConnectionMaintenance(result)}`);
     } catch (err) {
-      console.error('[Scheduler] Periodic maintenance error:', err);
+      console.error('[Scheduler] Connection maintenance error:', err);
     }
   });
 }
@@ -256,7 +288,7 @@ export async function startScheduler() {
   logCleanupTask = createLogCleanupTask(activeLogCleanupCron);
 
   console.log(`[Scheduler] Check-in schedule: ${config.checkinScheduleMode} (${config.checkinScheduleMode === 'cron' ? activeCheckinCron : `${config.checkinIntervalHours}h`})`);
-  console.log(`[Scheduler] Periodic maintenance cron: ${activeBalanceCron}`);
+  console.log(`[Scheduler] Connection maintenance cron: ${activeBalanceCron}`);
   console.log(`[Scheduler] Daily summary cron: ${activeDailySummaryCron}`);
   console.log(
     `[Scheduler] Log cleanup cron: ${activeLogCleanupCron} (configured=${config.logCleanupConfigured}, usage=${activeLogCleanupUsageLogsEnabled}, program=${activeLogCleanupProgramLogsEnabled}, retentionDays=${activeLogCleanupRetentionDays})`,
@@ -300,6 +332,10 @@ export function updateBalanceRefreshCron(cronExpr: string) {
   config.balanceRefreshCron = cronExpr;
   balanceTask?.stop();
   balanceTask = createBalanceTask(cronExpr);
+}
+
+export function updateConnectionMaintenanceCron(cronExpr: string) {
+  updateBalanceRefreshCron(cronExpr);
 }
 
 export function updateLogCleanupSettings(input: {

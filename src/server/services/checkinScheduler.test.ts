@@ -65,15 +65,32 @@ describe('checkinScheduler', () => {
     refreshAllBalancesMock.mockReset();
     refreshModelsAndRebuildRoutesMock.mockReset();
     runPeriodicMaintenanceMock.mockResolvedValue({
+      skipped: false,
       summary: {
-        balances: {
-          total: 0,
-          refreshed: 0,
+        siteAccess: {
+          total: 1,
+          reachable: 1,
           failed: 0,
         },
-        tokenSync: {
-          total: 0,
-          synced: 0,
+        accountHealth: {
+          summary: {
+            total: 2,
+            healthy: 2,
+            unhealthy: 0,
+            failed: 0,
+          },
+        },
+        tokens: {
+          summary: {
+            total: 3,
+            synced: 2,
+            skipped: 1,
+            failed: 0,
+          },
+        },
+        groupRatios: {
+          total: 3,
+          synced: 3,
           skipped: 0,
           failed: 0,
         },
@@ -130,10 +147,11 @@ describe('checkinScheduler', () => {
     ], 6, now)).toEqual([1, 2]);
   });
 
-  it('runs periodic maintenance from the balance refresh schedule', async () => {
+  it('runs connection maintenance from the compatible balance refresh schedule', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const scheduler = await import('./checkinScheduler.js');
 
-    scheduler.updateBalanceRefreshCron('*/5 * * * *');
+    scheduler.updateConnectionMaintenanceCron('*/5 * * * *');
     const scheduledCallback = scheduleMock.mock.calls.at(-1)?.[1] as (() => Promise<void>) | undefined;
     expect(scheduledCallback).toBeTypeOf('function');
 
@@ -142,5 +160,8 @@ describe('checkinScheduler', () => {
     expect(runPeriodicMaintenanceMock).toHaveBeenCalledTimes(1);
     expect(refreshAllBalancesMock).not.toHaveBeenCalled();
     expect(refreshModelsAndRebuildRoutesMock).not.toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Running connection maintenance'));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Connection maintenance complete'));
+    logSpy.mockRestore();
   });
 });

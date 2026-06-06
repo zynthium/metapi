@@ -630,6 +630,46 @@ describe('account tokens sync routes with site status', () => {
     expect(syncedDefaultToken?.token).toBe('sk-synced-token');
   });
 
+  it('retries transient account token sync failures before marking the account failed', async () => {
+    const { account } = await seedAccount({ siteStatus: 'active' });
+
+    getApiTokensMock
+      .mockRejectedValueOnce(new Error('network-1'))
+      .mockRejectedValueOnce(new Error('network-2'))
+      .mockResolvedValueOnce([
+        { name: 'default', key: 'sk-retried-token', enabled: true },
+      ]);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/account-tokens/sync-all',
+      payload: { wait: true },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      success: boolean;
+      summary: {
+        total: number;
+        synced: number;
+        failed: number;
+      };
+      results: Array<{ accountId: number; status: string; synced?: boolean }>;
+    };
+
+    expect(body.summary).toMatchObject({
+      total: 1,
+      synced: 1,
+      failed: 0,
+    });
+    expect(body.results[0]).toMatchObject({
+      accountId: account.id,
+      status: 'synced',
+      synced: true,
+    });
+    expect(getApiTokensMock).toHaveBeenCalledTimes(3);
+  });
+
   it('rejects non-boolean wait when syncing all account tokens', async () => {
     const response = await app.inject({
       method: 'POST',
