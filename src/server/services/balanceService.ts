@@ -236,7 +236,11 @@ async function tryAutoRelogin(account: any, site: any): Promise<string | null> {
   return loginResult.accessToken;
 }
 
-export async function refreshBalance(accountId: number) {
+export async function refreshBalance(
+  accountId: number,
+  options: { updateRuntimeHealthOnFailure?: boolean } = {},
+) {
+  const updateRuntimeHealthOnFailure = options.updateRuntimeHealthOnFailure !== false;
   const rows = await db
     .select()
     .from(schema.accounts)
@@ -303,11 +307,13 @@ export async function refreshBalance(accountId: number) {
     () => adapter.getBalance(site.url, token, platformUserId));
   const handleBalanceError = async (err: any) => {
     const message = appendSessionTokenRebindHint(err?.message || 'unknown error');
-    setAccountRuntimeHealth(account.id, {
-      state: 'unhealthy',
-      reason: message,
-      source: 'balance',
-    });
+    if (updateRuntimeHealthOnFailure) {
+      setAccountRuntimeHealth(account.id, {
+        state: 'unhealthy',
+        reason: message,
+        source: 'balance',
+      });
+    }
     if (shouldReportExpired(message)) {
       await reportTokenExpired({
         accountId: account.id,

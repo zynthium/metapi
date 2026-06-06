@@ -25,11 +25,6 @@ import { startBackgroundTask } from "../../services/backgroundTaskService.js";
 import { parseCheckinRewardAmount } from "../../services/checkinRewardParser.js";
 import { estimateRewardWithTodayIncomeFallback } from "../../services/todayIncomeRewardService.js";
 import { getLocalDayRangeUtc } from "../../services/localTimeService.js";
-import {
-  buildRuntimeHealthForAccount,
-  setAccountRuntimeHealth,
-  type RuntimeHealthState,
-} from "../../services/accountHealthService.js";
 import { appendSessionTokenRebindHint } from "../../services/alertRules.js";
 import {
   parseSiteProxyUrlInput,
@@ -58,20 +53,10 @@ import {
   parseBatchApiKeys,
 } from "../../services/apiKeyBatch.js";
 import { createManualAccount } from "../../services/manualAccountCreationService.js";
-
-type AccountWithSiteRow = {
-  accounts: typeof schema.accounts.$inferSelect;
-  sites: typeof schema.sites.$inferSelect;
-};
-
-type AccountHealthRefreshResult = {
-  accountId: number;
-  username: string | null;
-  siteName: string;
-  status: "success" | "failed" | "skipped";
-  state: RuntimeHealthState;
-  message: string;
-};
+import {
+  executeRefreshAccountRuntimeHealth,
+  type AccountHealthRefreshSummary,
+} from "../../services/accountRuntimeHealthRefreshService.js";
 
 type AccountCapabilities = {
   canCheckin: boolean;
@@ -234,8 +219,6 @@ type LoginFailureInfo = {
   shieldBlocked: boolean;
 };
 
-const ACCOUNT_HEALTH_REFRESH_TIMEOUT_MS = 10_000;
-const ACCOUNT_HEALTH_REFRESH_MAX_ATTEMPTS = 3;
 const ACCOUNT_VERIFY_TIMEOUT_MS = 10_000;
 const ACCOUNT_VERIFY_DIAG_TIMEOUT_MS = 2_500;
 
@@ -269,20 +252,6 @@ function normalizeLoginFailure(
   };
 }
 
-function summarizeAccountHealthRefresh(results: AccountHealthRefreshResult[]) {
-  return {
-    total: results.length,
-    healthy: results.filter((item) => item.state === "healthy").length,
-    unhealthy: results.filter((item) => item.state === "unhealthy").length,
-    degraded: results.filter((item) => item.state === "degraded").length,
-    disabled: results.filter((item) => item.state === "disabled").length,
-    unknown: results.filter((item) => item.state === "unknown").length,
-    success: results.filter((item) => item.status === "success").length,
-    failed: results.filter((item) => item.status === "failed").length,
-    skipped: results.filter((item) => item.status === "skipped").length,
-  };
-}
-
 async function withTimeout<T>(
   fn: () => Promise<T>,
   timeoutMs: number,
@@ -299,33 +268,6 @@ async function withTimeout<T>(
   } finally {
     if (timer) clearTimeout(timer);
   }
-}
-
-async function refreshBalanceWithHealthRetry(
-  accountId: number,
-  timeoutMs: number,
-  timeoutMessage: string,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  let lastError: unknown = null;
-
-  for (let attempt = 1; attempt <= ACCOUNT_HEALTH_REFRESH_MAX_ATTEMPTS; attempt += 1) {
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) break;
-
-    try {
-      await withTimeout(
-        () => refreshBalance(accountId),
-        remainingMs,
-        timeoutMessage,
-      );
-      return;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  throw lastError || new Error(timeoutMessage);
 }
 
 function isVerificationTimeoutError(error: unknown): boolean {
@@ -404,125 +346,6 @@ function resolveUserIdFailureReason(
   return null;
 }
 
-async function refreshRuntimeHealthForRow(
-  row: AccountWithSiteRow,
-): Promise<AccountHealthRefreshResult> {
-  const accountId = row.accounts.id;
-  const username = row.accounts.username;
-  const siteName = row.sites.name;
-  const capabilities = buildCapabilitiesForAccount(row.accounts);
-
-  if (
-    (row.accounts.status || "active") === "disabled" ||
-    (row.sites.status || "active") === "disabled"
-  ) {
-    setAccountRuntimeHealth(accountId, {
-      state: "disabled",
-      reason: "账号或站点已禁用",
-      source: "health-refresh",
-    });
-    return {
-      accountId,
-      username,
-      siteName,
-      status: "skipped",
-      state: "disabled",
-      message: "账号或站点已禁用",
-    };
-  }
-
-  if (capabilities.proxyOnly) {
-    return {
-      accountId,
-      username,
-      siteName,
-      status: "skipped",
-      state: "unknown",
-      message: "仅代理账号不支持会话健康检查",
-    };
-  }
-
-  try {
-    await refreshBalanceWithHealthRetry(
-      accountId,
-      ACCOUNT_HEALTH_REFRESH_TIMEOUT_MS,
-      `站点健康检查超时（${Math.max(1, Math.round(ACCOUNT_HEALTH_REFRESH_TIMEOUT_MS / 1000))}s）`,
-    );
-    const refreshedAccount = await db
-      .select()
-      .from(schema.accounts)
-      .where(eq(schema.accounts.id, accountId))
-      .get();
-    const runtimeHealth = buildRuntimeHealthForAccount({
-      accountStatus: refreshedAccount?.status || row.accounts.status,
-      siteStatus: row.sites.status,
-      extraConfig: refreshedAccount?.extraConfig ?? row.accounts.extraConfig,
-      sessionCapable: capabilities.canRefreshBalance,
-    });
-
-    if (runtimeHealth.state === "unknown") {
-      const healthy = await setAccountRuntimeHealth(accountId, {
-        state: "healthy",
-        reason: "健康检查通过",
-        source: "health-refresh",
-      });
-      return {
-        accountId,
-        username,
-        siteName,
-        status: "success",
-        state: healthy?.state || "healthy",
-        message: healthy?.reason || "健康检查通过",
-      };
-    }
-
-    return {
-      accountId,
-      username,
-      siteName,
-      status: runtimeHealth.state === "unhealthy" ? "failed" : "success",
-      state: runtimeHealth.state,
-      message: runtimeHealth.reason,
-    };
-  } catch (error: any) {
-    const message = String(error?.message || "健康检查失败");
-    setAccountRuntimeHealth(accountId, {
-      state: "unhealthy",
-      reason: message,
-      source: "health-refresh",
-    });
-    return {
-      accountId,
-      username,
-      siteName,
-      status: "failed",
-      state: "unhealthy",
-      message,
-    };
-  }
-}
-
-async function executeRefreshAccountRuntimeHealth(accountId?: number) {
-  const rows = await db
-    .select()
-    .from(schema.accounts)
-    .innerJoin(schema.sites, eq(schema.accounts.siteId, schema.sites.id))
-    .all();
-
-  const targetRows = Number.isFinite(accountId as number)
-    ? rows.filter((row) => row.accounts.id === accountId)
-    : rows;
-
-  const results: AccountHealthRefreshResult[] = [];
-  for (const row of targetRows) {
-    results.push(await refreshRuntimeHealthForRow(row));
-  }
-
-  return {
-    summary: summarizeAccountHealthRefresh(results),
-    results,
-  };
-}
 
 export async function accountsRoutes(app: FastifyInstance) {
   // List all accounts (with site info)
@@ -1718,7 +1541,11 @@ export async function accountsRoutes(app: FastifyInstance) {
       const wait = parsedBody.data.wait === true;
 
       if (wait) {
-        const result = await executeRefreshAccountRuntimeHealth(accountId);
+        const result = await executeRefreshAccountRuntimeHealth({
+          accountId,
+          retryAttempts: 5,
+          attemptTimeoutMs: 10_000,
+        });
         if (accountId && result.summary.total === 0) {
           return reply
             .code(404)
@@ -1746,7 +1573,7 @@ export async function accountsRoutes(app: FastifyInstance) {
           successMessage: (currentTask) => {
             const summary = (
               currentTask.result as {
-                summary?: ReturnType<typeof summarizeAccountHealthRefresh>;
+                summary?: AccountHealthRefreshSummary;
               }
             )?.summary;
             if (!summary) return `${taskTitle}已完成`;
@@ -1755,7 +1582,11 @@ export async function accountsRoutes(app: FastifyInstance) {
           failureMessage: (currentTask) =>
             `${taskTitle}失败：${currentTask.error || "unknown error"}`,
         },
-        async () => executeRefreshAccountRuntimeHealth(accountId),
+        async () => executeRefreshAccountRuntimeHealth({
+          accountId,
+          retryAttempts: 5,
+          attemptTimeoutMs: 10_000,
+        }),
       );
 
       return reply.code(202).send({
