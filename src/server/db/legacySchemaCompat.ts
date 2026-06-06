@@ -39,6 +39,7 @@ export interface LegacySchemaCompatInspector extends
 
 const BOOTSTRAP_OWNED_LEGACY_TABLES = [
   'account_tokens',
+  'account_group_ratios',
   'token_model_availability',
   'proxy_video_tasks',
   'downstream_api_keys',
@@ -65,6 +66,9 @@ const BOOTSTRAP_OWNED_LEGACY_COLUMNS = [
 
 const BOOTSTRAP_OWNED_LEGACY_INDEXES = [
   'token_model_availability_token_model_unique',
+  'account_group_ratios_account_site_group_unique',
+  'account_group_ratios_account_site_idx',
+  'account_group_ratios_site_group_idx',
   'proxy_video_tasks_public_id_unique',
   'proxy_video_tasks_upstream_video_id_idx',
   'downstream_api_keys_key_unique',

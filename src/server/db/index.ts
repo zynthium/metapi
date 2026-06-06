@@ -27,6 +27,7 @@ const TABLES_WITH_NUMERIC_ID = new Set([
   'sites',
   'accounts',
   'account_tokens',
+  'account_group_ratios',
   'checkin_logs',
   'model_availability',
   'token_model_availability',
@@ -556,6 +557,29 @@ function ensureRouteGroupingSchema() {
     CREATE INDEX IF NOT EXISTS route_group_sources_source_route_id_idx
     ON route_group_sources(source_route_id);
   `);
+}
+
+function ensureAccountGroupRatiosSchema() {
+  if (!tableExists('account_group_ratios')) {
+    execSqliteLegacyCompat(`
+      CREATE TABLE IF NOT EXISTS account_group_ratios (
+        id integer PRIMARY KEY AUTOINCREMENT,
+        account_id integer NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        site_id integer NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+        group_name text NOT NULL,
+        multiplier real NOT NULL,
+        refreshed_at text,
+        failed_attempts integer NOT NULL DEFAULT 0,
+        last_error text,
+        created_at text DEFAULT (datetime('now')),
+        updated_at text DEFAULT (datetime('now')),
+        CHECK (multiplier > 0)
+      );
+    `);
+  }
+  execSqliteLegacyCompat(`CREATE UNIQUE INDEX IF NOT EXISTS account_group_ratios_account_site_group_unique ON account_group_ratios(account_id, site_id, group_name);`);
+  execSqliteLegacyCompat(`CREATE INDEX IF NOT EXISTS account_group_ratios_account_site_idx ON account_group_ratios(account_id, site_id);`);
+  execSqliteLegacyCompat(`CREATE INDEX IF NOT EXISTS account_group_ratios_site_group_idx ON account_group_ratios(site_id, group_name);`);
 }
 
 function ensureDownstreamApiKeySchema() {
@@ -1364,6 +1388,7 @@ function initSqliteDb() {
   ensureSiteExternalCheckinUrlSchema();
   ensureSiteGlobalWeightSchema();
   ensureRouteGroupingSchema();
+  ensureAccountGroupRatiosSchema();
   ensureDownstreamApiKeySchema();
   ensureProxyLogBillingDetailsSchema();
   ensureProxyLogClientSchema();

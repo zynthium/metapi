@@ -1,5 +1,69 @@
 {
   "tables": {
+    "account_group_ratios": {
+      "columns": {
+        "id": {
+          "logicalType": "integer",
+          "notNull": true,
+          "defaultValue": null,
+          "primaryKey": true
+        },
+        "account_id": {
+          "logicalType": "integer",
+          "notNull": true,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "site_id": {
+          "logicalType": "integer",
+          "notNull": true,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "group_name": {
+          "logicalType": "text",
+          "notNull": true,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "multiplier": {
+          "logicalType": "real",
+          "notNull": true,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "refreshed_at": {
+          "logicalType": "datetime",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "failed_attempts": {
+          "logicalType": "integer",
+          "notNull": true,
+          "defaultValue": "0",
+          "primaryKey": false
+        },
+        "last_error": {
+          "logicalType": "text",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "created_at": {
+          "logicalType": "datetime",
+          "notNull": false,
+          "defaultValue": "datetime('now')",
+          "primaryKey": false
+        },
+        "updated_at": {
+          "logicalType": "datetime",
+          "notNull": false,
+          "defaultValue": "datetime('now')",
+          "primaryKey": false
+        }
+      }
+    },
     "account_tokens": {
       "columns": {
         "id": {
@@ -1512,12 +1576,6 @@
           "defaultValue": "10",
           "primaryKey": false
         },
-        "multiplier": {
-          "logicalType": "real",
-          "notNull": false,
-          "defaultValue": "1.0",
-          "primaryKey": false
-        },
         "enabled": {
           "logicalType": "boolean",
           "notNull": false,
@@ -1594,6 +1652,12 @@
           "logicalType": "integer",
           "notNull": false,
           "defaultValue": null,
+          "primaryKey": false
+        },
+        "multiplier": {
+          "logicalType": "real",
+          "notNull": false,
+          "defaultValue": "1.0",
           "primaryKey": false
         }
       }
@@ -2240,6 +2304,34 @@
     }
   },
   "indexes": [
+    {
+      "name": "account_group_ratios_account_site_group_unique",
+      "table": "account_group_ratios",
+      "columns": [
+        "account_id",
+        "site_id",
+        "group_name"
+      ],
+      "unique": true
+    },
+    {
+      "name": "account_group_ratios_account_site_idx",
+      "table": "account_group_ratios",
+      "columns": [
+        "account_id",
+        "site_id"
+      ],
+      "unique": false
+    },
+    {
+      "name": "account_group_ratios_site_group_idx",
+      "table": "account_group_ratios",
+      "columns": [
+        "site_id",
+        "group_name"
+      ],
+      "unique": false
+    },
     {
       "name": "account_tokens_account_enabled_idx",
       "table": "account_tokens",
@@ -2959,6 +3051,15 @@
   ],
   "uniques": [
     {
+      "name": "account_group_ratios_account_site_group_unique",
+      "table": "account_group_ratios",
+      "columns": [
+        "account_id",
+        "site_id",
+        "group_name"
+      ]
+    },
+    {
       "name": "admin_snapshots_namespace_key_unique",
       "table": "admin_snapshots",
       "columns": [
@@ -3093,6 +3194,28 @@
     }
   ],
   "foreignKeys": [
+    {
+      "table": "account_group_ratios",
+      "columns": [
+        "account_id"
+      ],
+      "referencedTable": "accounts",
+      "referencedColumns": [
+        "id"
+      ],
+      "onDelete": "CASCADE"
+    },
+    {
+      "table": "account_group_ratios",
+      "columns": [
+        "site_id"
+      ],
+      "referencedTable": "sites",
+      "referencedColumns": [
+        "id"
+      ],
+      "onDelete": "CASCADE"
+    },
     {
       "table": "account_tokens",
       "columns": [

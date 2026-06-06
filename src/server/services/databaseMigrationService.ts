@@ -34,6 +34,7 @@ type BackupSnapshot = {
     siteDisabledModels: Array<Record<string, unknown>>;
     accounts: Array<Record<string, unknown>>;
     accountTokens: Array<Record<string, unknown>>;
+    accountGroupRatios: Array<Record<string, unknown>>;
     checkinLogs: Array<Record<string, unknown>>;
     modelAvailability: Array<Record<string, unknown>>;
     tokenModelAvailability: Array<Record<string, unknown>>;
@@ -64,6 +65,7 @@ export interface DatabaseMigrationSummary {
     siteDisabledModels: number;
     accounts: number;
     accountTokens: number;
+    accountGroupRatios: number;
     tokenRoutes: number;
     routeChannels: number;
     routeGroupSources: number;
@@ -258,6 +260,7 @@ async function toBackupSnapshot(): Promise<BackupSnapshot> {
       siteDisabledModels: await db.select().from(schema.siteDisabledModels).all() as Array<Record<string, unknown>>,
       accounts: await db.select().from(schema.accounts).all() as Array<Record<string, unknown>>,
       accountTokens: await db.select().from(schema.accountTokens).all() as Array<Record<string, unknown>>,
+      accountGroupRatios: await db.select().from(schema.accountGroupRatios).all() as Array<Record<string, unknown>>,
       checkinLogs: await db.select().from(schema.checkinLogs).all() as Array<Record<string, unknown>>,
       modelAvailability: await db.select().from(schema.modelAvailability).all() as Array<Record<string, unknown>>,
       tokenModelAvailability: await db.select().from(schema.tokenModelAvailability).all() as Array<Record<string, unknown>>,
@@ -298,6 +301,7 @@ async function clearTargetData(client: SqlClient): Promise<void> {
     'proxy_logs',
     'proxy_video_tasks',
     'proxy_files',
+    'account_group_ratios',
     'account_tokens',
     'accounts',
     'site_announcements',
@@ -475,6 +479,25 @@ function buildStatements(
         asNullableString(row.source) ?? 'manual',
         asBoolean(row.enabled, true),
         asBoolean(row.isDefault, false),
+        asNullableString(row.createdAt),
+        asNullableString(row.updatedAt),
+      ],
+    });
+  }
+
+  for (const row of (snapshot.accounts.accountGroupRatios || [])) {
+    statements.push({
+      table: 'account_group_ratios',
+      columns: ['id', 'account_id', 'site_id', 'group_name', 'multiplier', 'refreshed_at', 'failed_attempts', 'last_error', 'created_at', 'updated_at'],
+      values: [
+        asNumber(row.id, 0),
+        asNumber(row.accountId, 0),
+        asNumber(row.siteId, 0),
+        asNullableString(row.groupName) ?? 'default',
+        asNumber(row.multiplier, 1),
+        asNullableString(row.refreshedAt),
+        asNumber(row.failedAttempts, 0),
+        asNullableString(row.lastError),
         asNullableString(row.createdAt),
         asNullableString(row.updatedAt),
       ],
@@ -751,6 +774,7 @@ async function syncPostgresSequences(client: SqlClient): Promise<void> {
     'site_disabled_models',
     'accounts',
     'account_tokens',
+    'account_group_ratios',
     'checkin_logs',
     'model_availability',
     'token_model_availability',
@@ -820,6 +844,7 @@ export async function migrateCurrentDatabase(input: DatabaseMigrationInput): Pro
       siteDisabledModels: snapshot.accounts.siteDisabledModels.length,
       accounts: snapshot.accounts.accounts.length,
       accountTokens: snapshot.accounts.accountTokens.length,
+      accountGroupRatios: snapshot.accounts.accountGroupRatios.length,
       tokenRoutes: snapshot.accounts.tokenRoutes.length,
       routeChannels: snapshot.accounts.routeChannels.length,
       checkinLogs: snapshot.accounts.checkinLogs.length,

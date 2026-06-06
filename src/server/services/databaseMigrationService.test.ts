@@ -19,6 +19,7 @@ function createDbSchemaMock() {
     siteDisabledModels: { __table: 'siteDisabledModels' },
     accounts: { __table: 'accounts' },
     accountTokens: { __table: 'accountTokens' },
+    accountGroupRatios: { __table: 'accountGroupRatios' },
     checkinLogs: { __table: 'checkinLogs' },
     modelAvailability: { __table: 'modelAvailability' },
     tokenModelAvailability: { __table: 'tokenModelAvailability' },
@@ -244,6 +245,63 @@ describe('databaseMigrationService', () => {
     expect(siteStatement?.values[useSystemProxyIndex]).toBe(true);
     expect(customHeadersIndex).toBeGreaterThanOrEqual(0);
     expect(siteStatement?.values[customHeadersIndex]).toBe('{"x-site-scope":"internal"}');
+  });
+
+  it('includes account group ratios when building migration statements', () => {
+    const statements = __databaseMigrationServiceTestUtils.buildStatements({
+      version: 'test',
+      timestamp: Date.now(),
+      accounts: {
+        sites: [],
+        siteAnnouncements: [],
+        siteDisabledModels: [],
+        accounts: [],
+        accountTokens: [],
+        accountGroupRatios: [{
+          id: 9,
+          accountId: 2,
+          siteId: 1,
+          groupName: 'vip',
+          multiplier: 0.25,
+          refreshedAt: '2026-06-07T01:00:00.000Z',
+          failedAttempts: 0,
+          lastError: null,
+          createdAt: '2026-06-07T00:00:00.000Z',
+          updatedAt: '2026-06-07T01:00:00.000Z',
+        }],
+        checkinLogs: [],
+        modelAvailability: [],
+        tokenModelAvailability: [],
+        tokenRoutes: [],
+        routeChannels: [],
+        routeGroupSources: [],
+        proxyLogs: [],
+        proxyVideoTasks: [],
+        proxyFiles: [],
+        downstreamApiKeys: [],
+        events: [],
+      },
+      preferences: {
+        settings: [],
+      },
+    });
+
+    const statement = statements.find((item) => item.table === 'account_group_ratios');
+    expect(statement).toBeDefined();
+    expect(statement?.columns).toEqual([
+      'id',
+      'account_id',
+      'site_id',
+      'group_name',
+      'multiplier',
+      'refreshed_at',
+      'failed_attempts',
+      'last_error',
+      'created_at',
+      'updated_at',
+    ]);
+    expect(statement?.values[statement.columns.indexOf('group_name')]).toBe('vip');
+    expect(statement?.values[statement.columns.indexOf('multiplier')]).toBe(0.25);
   });
 
   it('includes site api endpoints when building migration statements', () => {

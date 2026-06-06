@@ -103,6 +103,24 @@ export const accountTokens = sqliteTable('account_tokens', {
   enabledIdx: index('account_tokens_enabled_idx').on(table.enabled),
 }));
 
+export const accountGroupRatios = sqliteTable('account_group_ratios', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  accountId: integer('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  siteId: integer('site_id').notNull().references(() => sites.id, { onDelete: 'cascade' }),
+  groupName: text('group_name').notNull(),
+  multiplier: real('multiplier').notNull(),
+  refreshedAt: text('refreshed_at'),
+  failedAttempts: integer('failed_attempts').notNull().default(0),
+  lastError: text('last_error'),
+  createdAt: text('created_at').default(sql`(datetime('now'))`),
+  updatedAt: text('updated_at').default(sql`(datetime('now'))`),
+}, (table) => ({
+  accountSiteGroupUnique: uniqueIndex('account_group_ratios_account_site_group_unique').on(table.accountId, table.siteId, table.groupName),
+  accountSiteIdx: index('account_group_ratios_account_site_idx').on(table.accountId, table.siteId),
+  siteGroupIdx: index('account_group_ratios_site_group_idx').on(table.siteId, table.groupName),
+  multiplierPositive: check('account_group_ratios_multiplier_positive', sql`${table.multiplier} > 0`),
+}));
+
 export const checkinLogs = sqliteTable('checkin_logs', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   accountId: integer('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
