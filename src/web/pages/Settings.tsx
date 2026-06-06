@@ -52,6 +52,26 @@ const CHECKIN_INTERVAL_OPTIONS = Array.from({ length: 24 }, (_, index) => {
     label: `${hour} 小时`,
   };
 });
+const DEFAULT_CONNECTION_MAINTENANCE_STAGES: Record<string, boolean> = {
+  siteAccess: true,
+  accountHealth: true,
+  tokens: true,
+  groupRatios: true,
+  modelCoverage: true,
+  routeMultipliers: true,
+  routeDecisionSnapshots: true,
+  accountsSnapshot: true,
+};
+const CONNECTION_MAINTENANCE_STAGE_LABELS = [
+  { key: 'siteAccess', label: '站点可访问性' },
+  { key: 'accountHealth', label: '账号健康' },
+  { key: 'tokens', label: '账号令牌' },
+  { key: 'groupRatios', label: '分组倍率' },
+  { key: 'modelCoverage', label: '模型列表' },
+  { key: 'routeMultipliers', label: '路由倍率' },
+  { key: 'routeDecisionSnapshots', label: '路由快照' },
+  { key: 'accountsSnapshot', label: '账号快照' },
+] as const;
 type DbDialect = 'sqlite' | 'mysql' | 'postgres';
 type RouteCooldownUnit = typeof ROUTE_COOLDOWN_UNIT_OPTIONS[number]['value'];
 type SettingsPillTone = 'neutral' | 'primary' | 'danger' | 'warning';
@@ -63,6 +83,12 @@ type RuntimeSettings = {
   checkinScheduleMode: 'cron' | 'interval';
   checkinIntervalHours: number;
   balanceRefreshCron: string;
+  connectionMaintenanceEnabled: boolean;
+  connectionMaintenanceCron: string;
+  connectionMaintenanceRetryAttempts: number;
+  connectionMaintenanceAttemptTimeoutSec: number;
+  connectionMaintenanceConcurrency: number;
+  connectionMaintenanceStages: Record<string, boolean>;
   logCleanupCron: string;
   logCleanupUsageLogsEnabled: boolean;
   logCleanupProgramLogsEnabled: boolean;
@@ -345,6 +371,12 @@ export default function Settings() {
     checkinScheduleMode: 'cron',
     checkinIntervalHours: 6,
     balanceRefreshCron: '0 * * * *',
+    connectionMaintenanceEnabled: true,
+    connectionMaintenanceCron: '0 * * * *',
+    connectionMaintenanceRetryAttempts: 5,
+    connectionMaintenanceAttemptTimeoutSec: 15,
+    connectionMaintenanceConcurrency: 3,
+    connectionMaintenanceStages: DEFAULT_CONNECTION_MAINTENANCE_STAGES,
     logCleanupCron: '0 6 * * *',
     logCleanupUsageLogsEnabled: false,
     logCleanupProgramLogsEnabled: false,
@@ -668,6 +700,15 @@ export default function Settings() {
           ? Math.min(24, Math.trunc(Number(runtimeInfo.checkinIntervalHours)))
           : 6,
         balanceRefreshCron: runtimeInfo.balanceRefreshCron || '0 * * * *',
+        connectionMaintenanceEnabled: runtimeInfo.connectionMaintenanceEnabled !== false,
+        connectionMaintenanceCron: runtimeInfo.connectionMaintenanceCron || runtimeInfo.balanceRefreshCron || '0 * * * *',
+        connectionMaintenanceRetryAttempts: Math.min(10, Math.max(1, Math.trunc(Number(runtimeInfo.connectionMaintenanceRetryAttempts) || 5))),
+        connectionMaintenanceAttemptTimeoutSec: Math.min(120, Math.max(3, Math.trunc(Number(runtimeInfo.connectionMaintenanceAttemptTimeoutSec) || 15))),
+        connectionMaintenanceConcurrency: Math.min(16, Math.max(1, Math.trunc(Number(runtimeInfo.connectionMaintenanceConcurrency) || 3))),
+        connectionMaintenanceStages: {
+          ...DEFAULT_CONNECTION_MAINTENANCE_STAGES,
+          ...(runtimeInfo.connectionMaintenanceStages || {}),
+        },
         logCleanupCron: runtimeInfo.logCleanupCron || '0 6 * * *',
         logCleanupUsageLogsEnabled: !!runtimeInfo.logCleanupUsageLogsEnabled,
         logCleanupProgramLogsEnabled: !!runtimeInfo.logCleanupProgramLogsEnabled,
@@ -787,6 +828,12 @@ export default function Settings() {
         checkinScheduleMode: runtime.checkinScheduleMode,
         checkinIntervalHours: runtime.checkinIntervalHours,
         balanceRefreshCron: runtime.balanceRefreshCron,
+        connectionMaintenanceEnabled: runtime.connectionMaintenanceEnabled,
+        connectionMaintenanceCron: runtime.connectionMaintenanceCron,
+        connectionMaintenanceRetryAttempts: runtime.connectionMaintenanceRetryAttempts,
+        connectionMaintenanceAttemptTimeoutSec: runtime.connectionMaintenanceAttemptTimeoutSec,
+        connectionMaintenanceConcurrency: runtime.connectionMaintenanceConcurrency,
+        connectionMaintenanceStages: runtime.connectionMaintenanceStages,
         logCleanupCron: runtime.logCleanupCron,
         logCleanupUsageLogsEnabled: runtime.logCleanupUsageLogsEnabled,
         logCleanupProgramLogsEnabled: runtime.logCleanupProgramLogsEnabled,
@@ -1383,6 +1430,100 @@ export default function Settings() {
                 onChange={(e) => setRuntime((prev) => ({ ...prev, balanceRefreshCron: e.target.value }))}
                 style={{ ...inputStyle, fontFamily: 'var(--font-mono)' }}
               />
+            </div>
+          </div>
+          <div
+            style={{
+              marginTop: 16,
+              paddingTop: 16,
+              borderTop: '1px solid var(--color-border-light)',
+              display: 'grid',
+              gap: 12,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>连接维护</div>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--color-text-secondary)' }}>
+                <input
+                  type="checkbox"
+                  checked={runtime.connectionMaintenanceEnabled}
+                  onChange={(e) => setRuntime((prev) => ({ ...prev, connectionMaintenanceEnabled: e.target.checked }))}
+                />
+                启用
+              </label>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 140px 140px 140px', gap: 12 }}>
+              <div>
+                <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 6 }}>维护 Cron</div>
+                <input
+                  value={runtime.connectionMaintenanceCron}
+                  onChange={(e) => setRuntime((prev) => ({ ...prev, connectionMaintenanceCron: e.target.value }))}
+                  style={{ ...inputStyle, fontFamily: 'var(--font-mono)' }}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 6 }}>重试次数</div>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={runtime.connectionMaintenanceRetryAttempts}
+                  onChange={(e) => setRuntime((prev) => ({
+                    ...prev,
+                    connectionMaintenanceRetryAttempts: Math.min(10, Math.max(1, Math.trunc(Number(e.target.value) || prev.connectionMaintenanceRetryAttempts))),
+                  }))}
+                  style={inputStyle}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 6 }}>单次超时</div>
+                <input
+                  type="number"
+                  min={3}
+                  max={120}
+                  value={runtime.connectionMaintenanceAttemptTimeoutSec}
+                  onChange={(e) => setRuntime((prev) => ({
+                    ...prev,
+                    connectionMaintenanceAttemptTimeoutSec: Math.min(120, Math.max(3, Math.trunc(Number(e.target.value) || prev.connectionMaintenanceAttemptTimeoutSec))),
+                  }))}
+                  style={inputStyle}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 6 }}>并发</div>
+                <input
+                  type="number"
+                  min={1}
+                  max={16}
+                  value={runtime.connectionMaintenanceConcurrency}
+                  onChange={(e) => setRuntime((prev) => ({
+                    ...prev,
+                    connectionMaintenanceConcurrency: Math.min(16, Math.max(1, Math.trunc(Number(e.target.value) || prev.connectionMaintenanceConcurrency))),
+                  }))}
+                  style={inputStyle}
+                />
+              </div>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14 }}>
+              {CONNECTION_MAINTENANCE_STAGE_LABELS.map((stage) => (
+                <label key={stage.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--color-text-secondary)' }}>
+                  <input
+                    type="checkbox"
+                    checked={runtime.connectionMaintenanceStages[stage.key] !== false}
+                    onChange={(e) => setRuntime((prev) => ({
+                      ...prev,
+                      connectionMaintenanceStages: {
+                        ...prev.connectionMaintenanceStages,
+                        [stage.key]: e.target.checked,
+                      },
+                    }))}
+                  />
+                  {stage.label}
+                </label>
+              ))}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-muted)', lineHeight: 1.6 }}>
+              旧的 balance_refresh_cron 仍作为兼容 fallback；连接维护会统一刷新站点、账号健康、令牌、倍率、模型和路由快照。
             </div>
           </div>
           <div

@@ -382,6 +382,12 @@ export type RuntimeSettingsPayload = {
   checkinScheduleMode?: "cron" | "interval";
   checkinIntervalHours?: number;
   balanceRefreshCron?: string;
+  connectionMaintenanceEnabled?: boolean;
+  connectionMaintenanceCron?: string;
+  connectionMaintenanceRetryAttempts?: number;
+  connectionMaintenanceAttemptTimeoutSec?: number;
+  connectionMaintenanceConcurrency?: number;
+  connectionMaintenanceStages?: Record<string, boolean>;
   logCleanupCron?: string;
   logCleanupUsageLogsEnabled?: boolean;
   logCleanupProgramLogsEnabled?: boolean;

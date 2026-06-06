@@ -25,9 +25,15 @@ let running: Promise<ConnectionMaintenanceResult> | null = null;
 function activeConfig(input?: ConnectionMaintenanceConfig): ConnectionMaintenanceConfig {
   if (input) return input;
   return {
-    ...DEFAULT_CONNECTION_MAINTENANCE_CONFIG,
-    cron: runtimeConfig.balanceRefreshCron,
-    stages: { ...DEFAULT_CONNECTION_MAINTENANCE_CONFIG.stages },
+    enabled: runtimeConfig.connectionMaintenanceEnabled,
+    cron: runtimeConfig.connectionMaintenanceCron || runtimeConfig.balanceRefreshCron || DEFAULT_CONNECTION_MAINTENANCE_CONFIG.cron,
+    retryAttempts: runtimeConfig.connectionMaintenanceRetryAttempts,
+    attemptTimeoutSec: runtimeConfig.connectionMaintenanceAttemptTimeoutSec,
+    concurrency: runtimeConfig.connectionMaintenanceConcurrency,
+    stages: {
+      ...DEFAULT_CONNECTION_MAINTENANCE_CONFIG.stages,
+      ...runtimeConfig.connectionMaintenanceStages,
+    },
   };
 }
 

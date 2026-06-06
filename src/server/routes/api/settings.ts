@@ -6,7 +6,12 @@ import { db, runtimeDbDialect, schema } from '../../db/index.js';
 import { upsertSetting } from '../../db/upsertSetting.js';
 import * as routeRefreshWorkflow from '../../services/routeRefreshWorkflow.js';
 import { getAllBrandNames } from '../../services/brandMatcher.js';
-import { updateBalanceRefreshCron, updateCheckinSchedule, updateLogCleanupSettings } from '../../services/checkinScheduler.js';
+import {
+  updateBalanceRefreshCron,
+  updateCheckinSchedule,
+  updateConnectionMaintenanceCron,
+  updateLogCleanupSettings,
+} from '../../services/checkinScheduler.js';
 import { sendNotification } from '../../services/notifyService.js';
 import {
   exportBackup,
@@ -45,6 +50,7 @@ import {
   stopModelAvailabilityProbeScheduler,
 } from '../../services/modelAvailabilityProbeService.js';
 import { parsePayloadRulesConfigInput } from '../../services/payloadRules.js';
+import { normalizeConnectionMaintenanceConfig } from '../../services/connectionMaintenanceConfig.js';
 
 type RoutingWeights = typeof config.routingWeights;
 
@@ -71,6 +77,12 @@ interface RuntimeSettingsBody {
   checkinScheduleMode?: 'cron' | 'interval';
   checkinIntervalHours?: number;
   balanceRefreshCron?: string;
+  connectionMaintenanceEnabled?: boolean;
+  connectionMaintenanceCron?: string;
+  connectionMaintenanceRetryAttempts?: number;
+  connectionMaintenanceAttemptTimeoutSec?: number;
+  connectionMaintenanceConcurrency?: number;
+  connectionMaintenanceStages?: Record<string, boolean>;
   logCleanupCron?: string;
   logCleanupUsageLogsEnabled?: boolean;
   logCleanupProgramLogsEnabled?: boolean;
@@ -717,6 +729,12 @@ function getRuntimeSettingsResponse(currentAdminIp = '') {
     checkinScheduleMode: config.checkinScheduleMode,
     checkinIntervalHours: config.checkinIntervalHours,
     balanceRefreshCron: config.balanceRefreshCron,
+    connectionMaintenanceEnabled: config.connectionMaintenanceEnabled,
+    connectionMaintenanceCron: config.connectionMaintenanceCron,
+    connectionMaintenanceRetryAttempts: config.connectionMaintenanceRetryAttempts,
+    connectionMaintenanceAttemptTimeoutSec: config.connectionMaintenanceAttemptTimeoutSec,
+    connectionMaintenanceConcurrency: config.connectionMaintenanceConcurrency,
+    connectionMaintenanceStages: config.connectionMaintenanceStages,
     logCleanupCron: config.logCleanupCron,
     logCleanupUsageLogsEnabled: config.logCleanupUsageLogsEnabled,
     logCleanupProgramLogsEnabled: config.logCleanupProgramLogsEnabled,
@@ -1051,7 +1069,104 @@ export async function settingsRoutes(app: FastifyInstance) {
         changedLabels.push(`余额刷新 Cron（${config.balanceRefreshCron} -> ${body.balanceRefreshCron}）`);
       }
       updateBalanceRefreshCron(body.balanceRefreshCron);
+      if (body.connectionMaintenanceCron === undefined) {
+        config.connectionMaintenanceCron = body.balanceRefreshCron;
+      }
       upsertSetting('balance_refresh_cron', body.balanceRefreshCron);
+    }
+
+    const connectionMaintenanceTouched =
+      body.connectionMaintenanceEnabled !== undefined
+      || body.connectionMaintenanceCron !== undefined
+      || body.connectionMaintenanceRetryAttempts !== undefined
+      || body.connectionMaintenanceAttemptTimeoutSec !== undefined
+      || body.connectionMaintenanceConcurrency !== undefined
+      || body.connectionMaintenanceStages !== undefined;
+
+    if (connectionMaintenanceTouched) {
+      const readBoundedInteger = (
+        value: unknown,
+        fallback: number,
+        min: number,
+        max: number,
+        label: string,
+      ): number => {
+        if (value === undefined) return fallback;
+        const parsed = Number(value);
+        if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+          throw new Error(`${label}必须是 ${min} 到 ${max} 的整数`);
+        }
+        return parsed;
+      };
+
+      const nextCron = body.connectionMaintenanceCron !== undefined
+        ? String(body.connectionMaintenanceCron || '').trim()
+        : config.connectionMaintenanceCron;
+      if (!cron.validate(nextCron)) {
+        return reply.code(400).send({ success: false, message: '连接维护 Cron 表达式无效' });
+      }
+
+      let nextRetryAttempts: number;
+      let nextAttemptTimeoutSec: number;
+      let nextConcurrency: number;
+      try {
+        nextRetryAttempts = readBoundedInteger(
+          body.connectionMaintenanceRetryAttempts,
+          config.connectionMaintenanceRetryAttempts,
+          1,
+          10,
+          '连接维护重试次数',
+        );
+        nextAttemptTimeoutSec = readBoundedInteger(
+          body.connectionMaintenanceAttemptTimeoutSec,
+          config.connectionMaintenanceAttemptTimeoutSec,
+          3,
+          120,
+          '连接维护单次超时',
+        );
+        nextConcurrency = readBoundedInteger(
+          body.connectionMaintenanceConcurrency,
+          config.connectionMaintenanceConcurrency,
+          1,
+          16,
+          '连接维护并发',
+        );
+      } catch (error: any) {
+        return reply.code(400).send({ success: false, message: error?.message || '连接维护配置无效' });
+      }
+
+      const nextConfig = normalizeConnectionMaintenanceConfig({
+        enabled: body.connectionMaintenanceEnabled ?? config.connectionMaintenanceEnabled,
+        cron: nextCron,
+        retryAttempts: nextRetryAttempts,
+        attemptTimeoutSec: nextAttemptTimeoutSec,
+        concurrency: nextConcurrency,
+        stages: body.connectionMaintenanceStages ?? config.connectionMaintenanceStages,
+      });
+
+      if (nextConfig.cron !== config.connectionMaintenanceCron) {
+        changedLabels.push(`连接维护 Cron（${config.connectionMaintenanceCron} -> ${nextConfig.cron}）`);
+      }
+      if (nextConfig.enabled !== config.connectionMaintenanceEnabled) {
+        changedLabels.push(nextConfig.enabled ? '开启连接维护' : '关闭连接维护');
+      }
+
+      config.connectionMaintenanceEnabled = nextConfig.enabled;
+      config.connectionMaintenanceCron = nextConfig.cron;
+      config.connectionMaintenanceRetryAttempts = nextConfig.retryAttempts;
+      config.connectionMaintenanceAttemptTimeoutSec = nextConfig.attemptTimeoutSec;
+      config.connectionMaintenanceConcurrency = nextConfig.concurrency;
+      config.connectionMaintenanceStages = nextConfig.stages;
+      config.balanceRefreshCron = nextConfig.cron;
+
+      updateConnectionMaintenanceCron(nextConfig.cron);
+      upsertSetting('connection_maintenance_enabled', nextConfig.enabled);
+      upsertSetting('connection_maintenance_cron', nextConfig.cron);
+      upsertSetting('connection_maintenance_retry_attempts', nextConfig.retryAttempts);
+      upsertSetting('connection_maintenance_attempt_timeout_sec', nextConfig.attemptTimeoutSec);
+      upsertSetting('connection_maintenance_concurrency', nextConfig.concurrency);
+      upsertSetting('connection_maintenance_stages', nextConfig.stages);
+      changedLabels.push('连接维护计划');
     }
 
     const logCleanupTouched =

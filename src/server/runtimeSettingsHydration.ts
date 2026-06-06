@@ -2,6 +2,7 @@ import {
   config,
   normalizeTokenRouterFailureCooldownMaxSec,
 } from './config.js';
+import { normalizeConnectionMaintenanceConfig } from './services/connectionMaintenanceConfig.js';
 import { normalizePayloadRulesConfig } from './services/payloadRules.js';
 import { normalizeLogCleanupRetentionDays } from './shared/logCleanupRetentionDays.js';
 
@@ -120,6 +121,44 @@ export function applyRuntimeSettings(settingsMap: Map<string, string>) {
 
   const balanceRefreshCron = parseSettingFromMap<string>(settingsMap, 'balance_refresh_cron');
   if (typeof balanceRefreshCron === 'string' && balanceRefreshCron) config.balanceRefreshCron = balanceRefreshCron;
+
+  const connectionMaintenanceEnabled = parseSettingFromMap<boolean>(settingsMap, 'connection_maintenance_enabled');
+  const connectionMaintenanceCron = parseSettingFromMap<string>(settingsMap, 'connection_maintenance_cron');
+  const connectionMaintenanceRetryAttempts = parseSettingFromMap<number>(settingsMap, 'connection_maintenance_retry_attempts');
+  const connectionMaintenanceAttemptTimeoutSec = parseSettingFromMap<number>(settingsMap, 'connection_maintenance_attempt_timeout_sec');
+  const connectionMaintenanceConcurrency = parseSettingFromMap<number>(settingsMap, 'connection_maintenance_concurrency');
+  const connectionMaintenanceStages = parseSettingFromMap<Record<string, boolean>>(settingsMap, 'connection_maintenance_stages');
+  const connectionMaintenanceTouched = [
+    'connection_maintenance_enabled',
+    'connection_maintenance_cron',
+    'connection_maintenance_retry_attempts',
+    'connection_maintenance_attempt_timeout_sec',
+    'connection_maintenance_concurrency',
+    'connection_maintenance_stages',
+    'balance_refresh_cron',
+  ].some((key) => settingsMap.has(key));
+
+  if (connectionMaintenanceTouched) {
+    const normalizedConnectionMaintenance = normalizeConnectionMaintenanceConfig({
+      enabled: typeof connectionMaintenanceEnabled === 'boolean'
+        ? connectionMaintenanceEnabled
+        : config.connectionMaintenanceEnabled,
+      cron: typeof connectionMaintenanceCron === 'string' && connectionMaintenanceCron.trim()
+        ? connectionMaintenanceCron
+        : (settingsMap.has('balance_refresh_cron') ? config.balanceRefreshCron : config.connectionMaintenanceCron),
+      retryAttempts: connectionMaintenanceRetryAttempts ?? config.connectionMaintenanceRetryAttempts,
+      attemptTimeoutSec: connectionMaintenanceAttemptTimeoutSec ?? config.connectionMaintenanceAttemptTimeoutSec,
+      concurrency: connectionMaintenanceConcurrency ?? config.connectionMaintenanceConcurrency,
+      stages: connectionMaintenanceStages ?? config.connectionMaintenanceStages,
+    }, { legacyBalanceCron: config.balanceRefreshCron });
+    config.connectionMaintenanceEnabled = normalizedConnectionMaintenance.enabled;
+    config.connectionMaintenanceCron = normalizedConnectionMaintenance.cron;
+    config.connectionMaintenanceRetryAttempts = normalizedConnectionMaintenance.retryAttempts;
+    config.connectionMaintenanceAttemptTimeoutSec = normalizedConnectionMaintenance.attemptTimeoutSec;
+    config.connectionMaintenanceConcurrency = normalizedConnectionMaintenance.concurrency;
+    config.connectionMaintenanceStages = normalizedConnectionMaintenance.stages;
+    config.balanceRefreshCron = normalizedConnectionMaintenance.cron;
+  }
 
   const logCleanupCron = parseSettingFromMap<string>(settingsMap, 'log_cleanup_cron');
   if (typeof logCleanupCron === 'string' && logCleanupCron) config.logCleanupCron = logCleanupCron;

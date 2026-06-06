@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import type { FastifyServerOptions } from 'fastify';
 import { normalizePayloadRulesConfig } from './services/payloadRules.js';
+import { normalizeConnectionMaintenanceConfig } from './services/connectionMaintenanceConfig.js';
 
 const DEFAULT_REQUEST_BODY_LIMIT = 20 * 1024 * 1024;
 const DEFAULT_CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
@@ -65,6 +66,13 @@ function parseListenHost(env: NodeJS.ProcessEnv): string {
 
 export function buildConfig(env: NodeJS.ProcessEnv) {
   const dataDir = env.DATA_DIR || './data';
+  const connectionMaintenanceConfig = normalizeConnectionMaintenanceConfig({
+    enabled: parseBoolean(env.CONNECTION_MAINTENANCE_ENABLED, true),
+    cron: env.CONNECTION_MAINTENANCE_CRON || env.BALANCE_REFRESH_CRON || '0 * * * *',
+    retryAttempts: parseNumber(env.CONNECTION_MAINTENANCE_RETRY_ATTEMPTS, 5),
+    attemptTimeoutSec: parseNumber(env.CONNECTION_MAINTENANCE_ATTEMPT_TIMEOUT_SEC, 15),
+    concurrency: parseNumber(env.CONNECTION_MAINTENANCE_CONCURRENCY, 3),
+  }, { legacyBalanceCron: env.BALANCE_REFRESH_CRON || '0 * * * *' });
 
   return {
     authToken: env.AUTH_TOKEN || 'change-me-admin-token',
@@ -82,7 +90,13 @@ export function buildConfig(env: NodeJS.ProcessEnv) {
       ? 'interval' as const
       : 'cron' as const,
     checkinIntervalHours: Math.min(24, Math.max(1, Math.trunc(parseNumber(env.CHECKIN_INTERVAL_HOURS, 6)))),
-    balanceRefreshCron: env.BALANCE_REFRESH_CRON || '0 * * * *',
+    balanceRefreshCron: env.BALANCE_REFRESH_CRON || connectionMaintenanceConfig.cron,
+    connectionMaintenanceEnabled: connectionMaintenanceConfig.enabled,
+    connectionMaintenanceCron: connectionMaintenanceConfig.cron,
+    connectionMaintenanceRetryAttempts: connectionMaintenanceConfig.retryAttempts,
+    connectionMaintenanceAttemptTimeoutSec: connectionMaintenanceConfig.attemptTimeoutSec,
+    connectionMaintenanceConcurrency: connectionMaintenanceConfig.concurrency,
+    connectionMaintenanceStages: connectionMaintenanceConfig.stages,
     logCleanupCron: env.LOG_CLEANUP_CRON || '0 6 * * *',
     logCleanupConfigured: false,
     logCleanupUsageLogsEnabled: parseBoolean(env.LOG_CLEANUP_USAGE_LOGS_ENABLED, false),

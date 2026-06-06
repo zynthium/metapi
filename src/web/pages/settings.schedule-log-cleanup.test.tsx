@@ -103,16 +103,21 @@ describe('Settings log cleanup schedule', () => {
       });
       await flushMicrotasks();
 
-      expect(apiMock.updateRuntimeSettings).toHaveBeenCalledWith({
+      expect(apiMock.updateRuntimeSettings).toHaveBeenCalledWith(expect.objectContaining({
         checkinCron: '0 8 * * *',
         checkinScheduleMode: 'interval',
         checkinIntervalHours: 6,
         balanceRefreshCron: '0 * * * *',
+        connectionMaintenanceEnabled: true,
+        connectionMaintenanceCron: '0 * * * *',
+        connectionMaintenanceRetryAttempts: 5,
+        connectionMaintenanceAttemptTimeoutSec: 15,
+        connectionMaintenanceConcurrency: 3,
         logCleanupCron: '15 4 * * *',
         logCleanupUsageLogsEnabled: true,
         logCleanupProgramLogsEnabled: true,
         logCleanupRetentionDays: 14,
-      });
+      }));
     } finally {
       root?.unmount();
     }

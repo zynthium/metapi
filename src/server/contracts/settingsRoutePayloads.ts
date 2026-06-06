@@ -2,9 +2,16 @@ import { z } from 'zod';
 
 const backupExportTypeSchema = z.enum(['all', 'accounts', 'preferences']);
 const migrationDialectSchema = z.enum(['sqlite', 'mysql', 'postgres']);
+const connectionMaintenanceStagesSchema = z.record(z.string(), z.boolean());
 
 const runtimeSettingsPayloadSchema = z.object({
   modelAvailabilityProbeEnabled: z.boolean().optional(),
+  connectionMaintenanceEnabled: z.boolean().optional(),
+  connectionMaintenanceCron: z.string().optional(),
+  connectionMaintenanceRetryAttempts: z.number().optional(),
+  connectionMaintenanceAttemptTimeoutSec: z.number().optional(),
+  connectionMaintenanceConcurrency: z.number().optional(),
+  connectionMaintenanceStages: connectionMaintenanceStagesSchema.optional(),
   webhookEnabled: z.boolean().optional(),
   barkEnabled: z.boolean().optional(),
   serverChanEnabled: z.boolean().optional(),
@@ -89,6 +96,24 @@ function formatSettingsPayloadError(error: z.ZodError): string {
   }
   if (firstPath === 'modelAvailabilityProbeEnabled') {
     return '批量测活开关格式无效：需要 boolean';
+  }
+  if (firstPath === 'connectionMaintenanceEnabled') {
+    return '连接维护开关格式无效：需要 boolean';
+  }
+  if (firstPath === 'connectionMaintenanceCron') {
+    return '连接维护 Cron 格式无效：需要 string';
+  }
+  if (firstPath === 'connectionMaintenanceRetryAttempts') {
+    return '连接维护重试次数格式无效：需要 number';
+  }
+  if (firstPath === 'connectionMaintenanceAttemptTimeoutSec') {
+    return '连接维护单次超时格式无效：需要 number';
+  }
+  if (firstPath === 'connectionMaintenanceConcurrency') {
+    return '连接维护并发格式无效：需要 number';
+  }
+  if (firstPath === 'connectionMaintenanceStages') {
+    return '连接维护阶段配置格式无效：需要对象，值为 boolean';
   }
   if (firstPath === 'barkEnabled') {
     return 'Bark 开关格式无效：需要 boolean';

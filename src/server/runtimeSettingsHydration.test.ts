@@ -54,4 +54,53 @@ describe('applyRuntimeSettings', () => {
 
     expect(config.globalAllowedModels).toEqual(['model-alpha', 'model-beta', 'model-gamma']);
   });
+
+  it('hydrates connection maintenance settings and keeps the legacy cron in sync', () => {
+    config.connectionMaintenanceEnabled = false;
+    config.connectionMaintenanceCron = '0 * * * *';
+    config.connectionMaintenanceRetryAttempts = 5;
+    config.connectionMaintenanceAttemptTimeoutSec = 15;
+    config.connectionMaintenanceConcurrency = 3;
+    config.connectionMaintenanceStages = {
+      siteAccess: true,
+      accountHealth: true,
+      tokens: true,
+      groupRatios: true,
+      modelCoverage: true,
+      routeMultipliers: true,
+      routeDecisionSnapshots: true,
+      accountsSnapshot: true,
+    };
+
+    applyRuntimeSettings(new Map([
+      ['connection_maintenance_enabled', JSON.stringify(true)],
+      ['connection_maintenance_cron', JSON.stringify('*/15 * * * *')],
+      ['connection_maintenance_retry_attempts', JSON.stringify(7)],
+      ['connection_maintenance_attempt_timeout_sec', JSON.stringify(20)],
+      ['connection_maintenance_concurrency', JSON.stringify(4)],
+      ['connection_maintenance_stages', JSON.stringify({ tokens: false, groupRatios: true })],
+    ]));
+
+    expect(config.connectionMaintenanceEnabled).toBe(true);
+    expect(config.connectionMaintenanceCron).toBe('*/15 * * * *');
+    expect(config.balanceRefreshCron).toBe('*/15 * * * *');
+    expect(config.connectionMaintenanceRetryAttempts).toBe(7);
+    expect(config.connectionMaintenanceAttemptTimeoutSec).toBe(20);
+    expect(config.connectionMaintenanceConcurrency).toBe(4);
+    expect(config.connectionMaintenanceStages.tokens).toBe(false);
+    expect(config.connectionMaintenanceStages.groupRatios).toBe(true);
+    expect(config.connectionMaintenanceStages.accountHealth).toBe(true);
+  });
+
+  it('uses the legacy balance refresh cron as connection maintenance fallback', () => {
+    config.connectionMaintenanceCron = '0 * * * *';
+    config.balanceRefreshCron = '0 * * * *';
+
+    applyRuntimeSettings(new Map([
+      ['balance_refresh_cron', JSON.stringify('5 * * * *')],
+    ]));
+
+    expect(config.connectionMaintenanceCron).toBe('5 * * * *');
+    expect(config.balanceRefreshCron).toBe('5 * * * *');
+  });
 });
