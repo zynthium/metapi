@@ -41,6 +41,7 @@ const API_TOKEN_DISCOVERY_TIMEOUT_MS = 8_000;
 const MODEL_DISCOVERY_TIMEOUT_MS = 12_000;
 const MODEL_REFRESH_BATCH_SIZE = 3;
 type SiteRow = typeof schema.sites.$inferSelect;
+type AccountRow = typeof schema.accounts.$inferSelect;
 const GEMINI_CLI_STATIC_MODELS = [
   'gemini-2.5-pro',
   'gemini-2.5-flash',
@@ -1451,28 +1452,48 @@ export async function rebuildTokenRoutesFromAvailability() {
     addModelCandidate(row.model_availability.modelName, row.accounts.id, null, row.accounts.siteId);
   }
 
-  const siteIdsWithTokenGroup = new Set<number>();
+  const accountById = new Map<number, AccountRow>();
+  const siteById = new Map<number, SiteRow>();
+  for (const row of usableTokenRows) {
+    accountById.set(row.accounts.id, row.accounts);
+    siteById.set(row.sites.id, row.sites);
+  }
+  for (const row of accountRows) {
+    accountById.set(row.accounts.id, row.accounts);
+    siteById.set(row.sites.id, row.sites);
+  }
+
+  const tokenGroupCandidates = new Map<string, {
+    accountId: number;
+    siteId: number;
+  }>();
   for (const candidateMap of modelCandidates.values()) {
     for (const candidate of candidateMap.values()) {
       if (candidate.tokenGroup && candidate.siteId) {
-        siteIdsWithTokenGroup.add(candidate.siteId);
+        tokenGroupCandidates.set(`${candidate.siteId}:${candidate.accountId}`, {
+          accountId: candidate.accountId,
+          siteId: candidate.siteId,
+        });
       }
     }
   }
 
-  const siteGroupRatioBySiteId = new Map<number, Record<string, number>>();
-  if (siteIdsWithTokenGroup.size > 0) {
-    const allSites = await db.select().from(schema.sites).all() as SiteRow[];
-    const siteById = new Map(allSites.map((s) => [s.id, s]));
-
+  const groupRatioBySiteAccount = new Map<string, Record<string, number>>();
+  if (tokenGroupCandidates.size > 0) {
     await Promise.all(
-      Array.from(siteIdsWithTokenGroup).map(async (siteId) => {
-        const site = siteById.get(siteId);
+      Array.from(tokenGroupCandidates.entries()).map(async ([key, candidate]) => {
+        const site = siteById.get(candidate.siteId);
         if (!site || site.status !== 'active') return;
+        const account = accountById.get(candidate.accountId);
+        if (!account) return;
+
+        const token = account.accessToken || account.apiToken || null;
+        if (!token) return;
+        const platformUserId = resolvePlatformUserId(account.extraConfig, account.username);
         try {
-          const groupRatio = await fetchGroupRatioForSite(site);
+          const groupRatio = await fetchGroupRatioForSite(site, token, platformUserId);
           if (groupRatio) {
-            siteGroupRatioBySiteId.set(siteId, groupRatio);
+            groupRatioBySiteAccount.set(key, groupRatio);
           }
         } catch {}
       }),
@@ -1484,8 +1505,23 @@ export async function rebuildTokenRoutesFromAvailability() {
 
   let createdRoutes = 0;
   let createdChannels = 0;
+  let updatedChannels = 0;
   let removedChannels = 0;
   let removedRoutes = 0;
+
+  const resolveChannelMultiplier = (candidate: {
+    accountId: number;
+    tokenGroup: string | null;
+    siteId: number;
+  }) => {
+    if (candidate.tokenGroup && candidate.siteId) {
+      const groupRatio = groupRatioBySiteAccount.get(`${candidate.siteId}:${candidate.accountId}`);
+      if (groupRatio && candidate.tokenGroup in groupRatio) {
+        return groupRatio[candidate.tokenGroup];
+      }
+    }
+    return 1.0;
+  };
 
   for (const [modelName, candidateMap] of modelCandidates.entries()) {
     let route = routes.find((r) => (r.routeMode || 'pattern') !== 'explicit_group' && r.modelPattern === modelName);
@@ -1507,15 +1543,18 @@ export async function rebuildTokenRoutesFromAvailability() {
     const desiredKeys = new Set(Array.from(candidateMap.keys()));
 
     for (const [candidateKey, candidate] of candidateMap.entries()) {
-      const exists = routeChannels.some((channel) => buildChannelKey(channel) === candidateKey);
-      if (exists) continue;
-
-      let channelMultiplier = 1.0;
-      if (candidate.tokenGroup && candidate.siteId) {
-        const siteGroupRatio = siteGroupRatioBySiteId.get(candidate.siteId);
-        if (siteGroupRatio && candidate.tokenGroup in siteGroupRatio) {
-          channelMultiplier = siteGroupRatio[candidate.tokenGroup];
+      const channelMultiplier = resolveChannelMultiplier(candidate);
+      const existing = routeChannels.find((channel) => buildChannelKey(channel) === candidateKey);
+      if (existing) {
+        if (!existing.manualOverride && existing.multiplier !== channelMultiplier) {
+          await db.update(schema.routeChannels)
+            .set({ multiplier: channelMultiplier })
+            .where(eq(schema.routeChannels.id, existing.id))
+            .run();
+          existing.multiplier = channelMultiplier;
+          updatedChannels++;
         }
+        continue;
       }
 
       const inserted = await db.insert(schema.routeChannels).values({
@@ -1583,7 +1622,7 @@ export async function rebuildTokenRoutesFromAvailability() {
     }
   }
 
-  if (createdRoutes > 0 || createdChannels > 0 || removedChannels > 0 || removedRoutes > 0) {
+  if (createdRoutes > 0 || createdChannels > 0 || updatedChannels > 0 || removedChannels > 0 || removedRoutes > 0) {
     await clearAllRouteDecisionSnapshots();
   }
 
@@ -1593,6 +1632,7 @@ export async function rebuildTokenRoutesFromAvailability() {
     models: modelCandidates.size,
     createdRoutes,
     createdChannels,
+    updatedChannels,
     removedChannels,
     removedRoutes,
   };

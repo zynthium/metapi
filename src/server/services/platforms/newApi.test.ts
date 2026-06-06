@@ -489,6 +489,18 @@ describe('NewApiAdapter', () => {
           res.end(JSON.stringify({ success: true, data: { default: true, gemini: true } }));
           return;
         }
+        if (typeof req.headers.authorization === 'string' && req.headers.authorization === 'Bearer object-groups-token') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            success: true,
+            data: [
+              { group: 'default', ratio: 1 },
+              { name: 'vip', ratio: 0.5 },
+              { group_name: 'premium', rate_multiplier: 2 },
+            ],
+          }));
+          return;
+        }
       }
 
       if (req.url === '/api/user/sign_in') {
@@ -746,6 +758,14 @@ describe('NewApiAdapter', () => {
     expect(groups).toEqual(['default', 'gemini']);
     expect(groups).not.toContain('success');
     expect(groups).not.toContain('message');
+  });
+
+  it('returns clean groups from self groups object array payload', async () => {
+    const adapter = new NewApiAdapter();
+    const groups = await adapter.getUserGroups(baseUrl, 'object-groups-token', 11494);
+
+    expect(groups).toEqual(['default', 'vip', 'premium']);
+    expect(groups).not.toContain('[object Object]');
   });
 
   it('throws expired-session error when group endpoint reports invalid access token', async () => {

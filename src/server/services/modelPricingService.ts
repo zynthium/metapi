@@ -8,6 +8,7 @@ import {
 const PRICE_CACHE_TTL_MS = 10 * 60 * 1000;
 const PRICE_CACHE_FAILURE_TTL_MS = 60 * 1000;
 const PRICING_FETCH_TIMEOUT_MS = 8_000;
+const PRICING_FETCH_RETRY_DELAYS_MS = [120, 300];
 const DEFAULT_GROUP = 'default';
 const ONE_HUB_PER_CALL_RATIO = 0.002;
 const MIN_ROUTING_REFERENCE_COST = 1e-6;
@@ -77,6 +78,7 @@ export interface EstimateProxyCostInput {
   cacheCreationTokens?: number;
   promptTokensIncludeCache?: boolean | null;
   billingPricingOverride?: ProxyBillingPricingOverride | null;
+  groupMultiplierOverride?: number | null;
 }
 
 interface ModelGroupPricing {
@@ -184,6 +186,92 @@ function normalizeGroupRatio(raw: unknown): Record<string, number> {
   }
 
   return result;
+}
+
+function normalizeGroupRatioMapPayload(payload: unknown): Record<string, number> {
+  const groupMap = unwrapPayload(payload);
+  const groupRatioSource: Record<string, number> = {};
+  if (Array.isArray(groupMap)) {
+    for (const item of groupMap) {
+      if (!item || typeof item !== 'object') continue;
+      const key = String(
+        (item as any).group
+          ?? (item as any).name
+          ?? (item as any).group_name
+          ?? (item as any).groupName
+          ?? (item as any).key
+          ?? (item as any).id
+          ?? '',
+      ).trim();
+      if (!key) continue;
+      groupRatioSource[key] = toNumber(
+        (item as any).ratio
+          ?? (item as any).rate_multiplier
+          ?? (item as any).rateMultiplier
+          ?? (item as any).multiplier,
+        1,
+      );
+    }
+  } else if (groupMap && typeof groupMap === 'object') {
+    for (const [key, group] of Object.entries(groupMap as Record<string, any>)) {
+      if (['success', 'message', 'code', 'data', 'error'].includes(key.trim().toLowerCase())) continue;
+      groupRatioSource[key] = toNumber(
+        group?.ratio
+          ?? group?.rate_multiplier
+          ?? group?.rateMultiplier
+          ?? group?.multiplier
+          ?? group,
+        1,
+      );
+    }
+  }
+  if (Object.keys(groupRatioSource).length === 0) return {};
+  return normalizeGroupRatio(groupRatioSource);
+}
+
+function normalizeSub2ApiAvailableGroupsPayload(payload: unknown): Record<string, number> | null {
+  const unwrapped = unwrapPayload(payload);
+  const items = Array.isArray(unwrapped)
+    ? unwrapped
+    : (unwrapped && typeof unwrapped === 'object'
+      ? ((unwrapped as any).items || (unwrapped as any).list || (unwrapped as any).groups || [])
+      : []);
+  const groupRatioSource: Record<string, number> = {};
+
+  if (Array.isArray(items)) {
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+      const ratio = toNumber(
+        (item as any).rate_multiplier
+          ?? (item as any).rateMultiplier
+          ?? (item as any).ratio
+          ?? (item as any).multiplier,
+        Number.NaN,
+      );
+      if (!Number.isFinite(ratio) || ratio <= 0) continue;
+
+      const keys = [
+        (item as any).id,
+        (item as any).group_id,
+        (item as any).groupId,
+        (item as any).name,
+        (item as any).group_name,
+        (item as any).groupName,
+        (item as any).title,
+        (item as any).label,
+        (item as any).code,
+      ]
+        .map((key) => String(key ?? '').trim())
+        .filter(Boolean);
+
+      for (const key of keys) {
+        groupRatioSource[key] = ratio;
+      }
+    }
+  }
+
+  if (Object.keys(groupRatioSource).length === 0) return null;
+  return normalizeGroupRatio(groupRatioSource);
 }
 
 function normalizeStringArray(raw: unknown): string[] {
@@ -330,7 +418,17 @@ function normalizeOneHubPricingPayload(availablePayload: unknown, groupPayload: 
   return { models, groupRatio };
 }
 
-async function fetchJson(url: string, options?: UndiciRequestInit): Promise<unknown> {
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableFetchError(error: any): boolean {
+  const code = String(error?.code || error?.cause?.code || '').trim();
+  if (['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'UND_ERR_SOCKET'].includes(code)) return true;
+  return error?.name === 'TypeError' && String(error?.message || '').includes('fetch failed');
+}
+
+async function fetchJsonOnce(url: string, options?: UndiciRequestInit): Promise<unknown> {
   const { fetch } = await import('undici');
   const controller = new AbortController();
   let timeoutHandle: ReturnType<typeof setTimeout> | null = setTimeout(() => {
@@ -373,6 +471,20 @@ async function fetchJson(url: string, options?: UndiciRequestInit): Promise<unkn
       timeoutHandle = null;
     }
   }
+}
+
+async function fetchJson(url: string, options?: UndiciRequestInit): Promise<unknown> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= PRICING_FETCH_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return await fetchJsonOnce(url, options);
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableFetchError(error) || attempt >= PRICING_FETCH_RETRY_DELAYS_MS.length) break;
+      await sleep(PRICING_FETCH_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+  throw lastError;
 }
 
 function normalizeUrl(baseUrl: string): string {
@@ -552,7 +664,20 @@ function resolveModel(modelName: string, data: PricingData): PricingModel | null
   return null;
 }
 
-function resolveGroupMultiplier(model: PricingModel, groupRatio: Record<string, number>): number {
+function normalizeGroupMultiplierOverride(value: unknown): number | null {
+  const multiplier = toNumber(value, Number.NaN);
+  if (Number.isFinite(multiplier) && multiplier > 0) return multiplier;
+  return null;
+}
+
+function resolveGroupMultiplier(
+  model: PricingModel,
+  groupRatio: Record<string, number>,
+  groupMultiplierOverride?: number | null,
+): number {
+  const explicitMultiplier = normalizeGroupMultiplierOverride(groupMultiplierOverride);
+  if (explicitMultiplier !== null) return explicitMultiplier;
+
   if (model.enableGroups.includes(DEFAULT_GROUP) && groupRatio[DEFAULT_GROUP]) {
     return groupRatio[DEFAULT_GROUP];
   }
@@ -666,12 +791,13 @@ export function calculateModelUsageBreakdown(
     promptTokensIncludeCache?: boolean | null;
   },
   groupRatio: Record<string, number>,
+  groupMultiplierOverride?: number | null,
 ): ProxyBillingDetails | null {
   if (model.quotaType === 1) {
     return null;
   }
 
-  const multiplier = resolveGroupMultiplier(model, groupRatio);
+  const multiplier = resolveGroupMultiplier(model, groupRatio, groupMultiplierOverride);
   const normalizedUsage = normalizeUsageBreakdownInput(usage);
   const cacheRatio = model.cacheRatio ?? 1;
   const cacheCreationRatio = model.cacheCreationRatio ?? 1;
@@ -720,14 +846,15 @@ export function calculateModelUsageCost(
     promptTokensIncludeCache?: boolean | null;
   },
   groupRatio: Record<string, number>,
+  groupMultiplierOverride?: number | null,
 ): number {
-  const multiplier = resolveGroupMultiplier(model, groupRatio);
+  const multiplier = resolveGroupMultiplier(model, groupRatio, groupMultiplierOverride);
 
   if (model.quotaType === 1) {
     return roundCost(calculatePerCallCost(model.modelPrice, multiplier));
   }
 
-  return calculateModelUsageBreakdown(model, usage, groupRatio)?.breakdown.totalCost ?? 0;
+  return calculateModelUsageBreakdown(model, usage, groupRatio, groupMultiplierOverride)?.breakdown.totalCost ?? 0;
 }
 
 function buildModelPricingCatalogFromData(pricingData: PricingData): ModelPricingCatalog {
@@ -828,7 +955,7 @@ export async function estimateProxyCost(input: EstimateProxyCostInput): Promise<
       return fallbackTokenCost(totalTokens, input.site.platform);
     }
 
-    return calculateModelUsageCost(model, usage, pricingData.groupRatio);
+    return calculateModelUsageCost(model, usage, pricingData.groupRatio, input.groupMultiplierOverride);
   } catch {
     return fallbackTokenCost(totalTokens, input.site.platform);
   }
@@ -848,6 +975,7 @@ async function fetchJsonViaNewApiShield(url: string, token: string): Promise<unk
 export async function fetchGroupRatioForSite(
   site: { id: number; url: string; platform?: string | null },
   accountToken?: string | null,
+  platformUserId?: number | null,
 ): Promise<Record<string, number> | null> {
   const baseUrl = normalizeUrl(site.url);
   const normalizedPlatform = (site.platform || '').trim().toLowerCase();
@@ -868,8 +996,36 @@ export async function fetchGroupRatioForSite(
       return normalizeGroupRatio(groupRatioSource);
     }
 
+    if (normalizedPlatform === 'sub2api') {
+      const headers: Record<string, string> = {};
+      if (accountToken) headers.Authorization = `Bearer ${accountToken}`;
+      try {
+        const availableGroupsPayload = await fetchJson(`${baseUrl}/api/v1/groups/available`, { headers });
+        if (availableGroupsPayload && typeof availableGroupsPayload === 'object') {
+          const groupRatio = normalizeSub2ApiAvailableGroupsPayload(availableGroupsPayload);
+          if (groupRatio) return groupRatio;
+        }
+      } catch {}
+    }
+
     const shouldTryShieldCookie = !!accountToken && (normalizedPlatform === 'anyrouter' || accountToken.includes('='));
     if (shouldTryShieldCookie) {
+      try {
+        const userGroupsPayload = await fetchJsonViaNewApiShield(`${baseUrl}/api/user/self/groups`, accountToken!);
+        if (userGroupsPayload && typeof userGroupsPayload === 'object') {
+          const groupRatio = normalizeGroupRatioMapPayload(userGroupsPayload);
+          if (Object.keys(groupRatio).length > 0) return groupRatio;
+        }
+      } catch {}
+
+      try {
+        const userGroupsPayload = await fetchJsonViaNewApiShield(`${baseUrl}/api/user/groups`, accountToken!);
+        if (userGroupsPayload && typeof userGroupsPayload === 'object') {
+          const groupRatio = normalizeGroupRatioMapPayload(userGroupsPayload);
+          if (Object.keys(groupRatio).length > 0) return groupRatio;
+        }
+      } catch {}
+
       const payload = await fetchJsonViaNewApiShield(`${baseUrl}/api/pricing`, accountToken!);
       if (payload && typeof payload === 'object' && 'group_ratio' in (payload as any)) {
         return normalizeGroupRatio((payload as any).group_ratio);
@@ -878,6 +1034,23 @@ export async function fetchGroupRatioForSite(
 
     const headers: Record<string, string> = {};
     if (accountToken) headers.Authorization = `Bearer ${accountToken}`;
+    if (platformUserId) headers['New-Api-User'] = String(platformUserId);
+    try {
+      const userGroupsPayload = await fetchJson(`${baseUrl}/api/user/self/groups`, { headers });
+      if (userGroupsPayload && typeof userGroupsPayload === 'object') {
+        const groupRatio = normalizeGroupRatioMapPayload(userGroupsPayload);
+        if (Object.keys(groupRatio).length > 0) return groupRatio;
+      }
+    } catch {}
+
+    try {
+      const userGroupsPayload = await fetchJson(`${baseUrl}/api/user/groups`, { headers });
+      if (userGroupsPayload && typeof userGroupsPayload === 'object') {
+        const groupRatio = normalizeGroupRatioMapPayload(userGroupsPayload);
+        if (Object.keys(groupRatio).length > 0) return groupRatio;
+      }
+    } catch {}
+
     const payload = await fetchJson(`${baseUrl}/api/pricing`, { headers });
     if (payload && typeof payload === 'object' && 'group_ratio' in (payload as any)) {
       return normalizeGroupRatio((payload as any).group_ratio);
@@ -913,7 +1086,7 @@ export async function buildProxyBillingDetails(input: EstimateProxyCostInput): P
     const model = resolveModel(input.modelName, pricingData);
     if (!model || model.quotaType === 1) return null;
 
-    return calculateModelUsageBreakdown(model, usage, pricingData.groupRatio);
+    return calculateModelUsageBreakdown(model, usage, pricingData.groupRatio, input.groupMultiplierOverride);
   } catch {
     return null;
   }

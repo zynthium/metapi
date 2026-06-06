@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { createServer, type Server } from 'node:http';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -331,5 +332,181 @@ describe('rebuildTokenRoutesFromAvailability', () => {
 
     const wildcardRouteAfter = await db.select().from(schema.tokenRoutes).where(eq(schema.tokenRoutes.id, wildcardRoute.id)).get();
     expect(wildcardRouteAfter).toBeDefined();
+  });
+
+  it('uses new-api account user id when fetching token group multipliers for rebuilt channels', async () => {
+    const requestedHeaders: Array<{ authorization?: string | string[]; newApiUser?: string | string[] }> = [];
+    const server = await new Promise<Server>((resolve) => {
+      const instance = createServer((req, res) => {
+        if (req.url === '/api/user/self/groups') {
+          requestedHeaders.push({
+            authorization: req.headers.authorization,
+            newApiUser: req.headers['new-api-user'],
+          });
+          if (req.headers.authorization !== 'Bearer session-token' || req.headers['new-api-user'] !== '198') {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, message: 'Unauthorized, New-Api-User header not provided' }));
+            return;
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            success: true,
+            data: {
+              default: { ratio: 1 },
+              'codex超低渠道': { ratio: 0.06 },
+            },
+          }));
+          return;
+        }
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, message: 'not found' }));
+      });
+      instance.listen(0, '127.0.0.1', () => resolve(instance));
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('test server failed to listen');
+
+    try {
+      const site = await db.insert(schema.sites).values({
+        name: 'new-api-site',
+        url: `http://127.0.0.1:${address.port}`,
+        platform: 'new-api',
+      }).returning().get();
+
+      const account = await db.insert(schema.accounts).values({
+        siteId: site.id,
+        username: 'new-api-user',
+        accessToken: 'session-token',
+        status: 'active',
+        extraConfig: JSON.stringify({ platformUserId: 198 }),
+      }).returning().get();
+
+      const token = await db.insert(schema.accountTokens).values({
+        accountId: account.id,
+        name: 'codex-low',
+        token: 'sk-codex-low',
+        tokenGroup: 'codex超低渠道',
+        source: 'sync',
+        enabled: true,
+        isDefault: true,
+      }).returning().get();
+
+      await db.insert(schema.tokenModelAvailability).values({
+        tokenId: token.id,
+        modelName: 'claude-sonnet-4',
+        available: true,
+      }).run();
+
+      const rebuild = await rebuildTokenRoutesFromAvailability();
+
+      expect(rebuild.models).toBe(1);
+      expect(requestedHeaders[0]).toEqual({
+        authorization: 'Bearer session-token',
+        newApiUser: '198',
+      });
+
+      const route = await db.select().from(schema.tokenRoutes)
+        .where(eq(schema.tokenRoutes.modelPattern, 'claude-sonnet-4'))
+        .get();
+      expect(route).toBeDefined();
+
+      const channels = await db.select().from(schema.routeChannels)
+        .where(and(
+          eq(schema.routeChannels.routeId, route!.id),
+          eq(schema.routeChannels.accountId, account.id),
+          eq(schema.routeChannels.tokenId, token.id),
+        ))
+        .all();
+
+      expect(channels).toHaveLength(1);
+      expect(channels[0]?.multiplier).toBe(0.06);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it('updates existing automatic route channel multiplier from token group ratio', async () => {
+    const server = await new Promise<Server>((resolve) => {
+      const instance = createServer((req, res) => {
+        if (req.url === '/api/user/self/groups') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            success: true,
+            data: {
+              default: { ratio: 1 },
+              codex: { ratio: 0.1 },
+            },
+          }));
+          return;
+        }
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, message: 'not found' }));
+      });
+      instance.listen(0, '127.0.0.1', () => resolve(instance));
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('test server failed to listen');
+
+    try {
+      const site = await db.insert(schema.sites).values({
+        name: 'new-api-site-existing-channel',
+        url: `http://127.0.0.1:${address.port}`,
+        platform: 'new-api',
+      }).returning().get();
+
+      const account = await db.insert(schema.accounts).values({
+        siteId: site.id,
+        username: 'new-api-user',
+        accessToken: 'session-token',
+        status: 'active',
+        extraConfig: JSON.stringify({ platformUserId: 4019 }),
+      }).returning().get();
+
+      const token = await db.insert(schema.accountTokens).values({
+        accountId: account.id,
+        name: 'codex',
+        token: 'sk-codex',
+        tokenGroup: 'codex',
+        source: 'sync',
+        enabled: true,
+        isDefault: true,
+      }).returning().get();
+
+      await db.insert(schema.tokenModelAvailability).values({
+        tokenId: token.id,
+        modelName: 'gpt-5.3-codex',
+        available: true,
+      }).run();
+
+      const route = await db.insert(schema.tokenRoutes).values({
+        modelPattern: 'gpt-5.3-codex',
+        enabled: true,
+      }).returning().get();
+
+      const channel = await db.insert(schema.routeChannels).values({
+        routeId: route.id,
+        accountId: account.id,
+        tokenId: token.id,
+        priority: 0,
+        weight: 10,
+        multiplier: 1,
+        enabled: true,
+        manualOverride: false,
+      }).returning().get();
+
+      const rebuild = await rebuildTokenRoutesFromAvailability();
+
+      expect(rebuild.updatedChannels).toBe(1);
+      const refreshed = await db.select().from(schema.routeChannels)
+        .where(eq(schema.routeChannels.id, channel.id))
+        .get();
+      expect(refreshed?.multiplier).toBe(0.1);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 });

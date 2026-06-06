@@ -157,6 +157,7 @@ export async function videosProxyRoute(app: FastifyInstance) {
           promptTokens: 0,
           completionTokens: 0,
           totalTokens: 0,
+          groupMultiplierOverride: selected.channel.multiplier,
         });
         await recordTokenRouterEventBestEffort('record channel success', () => (
           tokenRouter.recordSuccess(selected.channel.id, latency, estimatedCost, upstreamModel)

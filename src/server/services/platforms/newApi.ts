@@ -276,7 +276,20 @@ export class NewApiAdapter extends BasePlatformAdapter {
     const source = payload?.data ?? payload;
     if (Array.isArray(source)) {
       return source
-        .map((item) => String(item || '').trim())
+        .map((item) => {
+          if (item && typeof item === 'object') {
+            return String(
+              item.group
+                ?? item.name
+                ?? item.group_name
+                ?? item.groupName
+                ?? item.key
+                ?? item.id
+                ?? '',
+            ).trim();
+          }
+          return String(item || '').trim();
+        })
         .filter(Boolean);
     }
 

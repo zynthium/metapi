@@ -154,6 +154,7 @@ export async function imagesProxyRoute(app: FastifyInstance) {
             promptTokens: 0,
             completionTokens: 0,
             totalTokens: 0,
+            groupMultiplierOverride: selected.channel.multiplier,
           });
         });
         await recordTokenRouterEventBestEffort('record channel success', () => (
@@ -374,6 +375,7 @@ export async function imagesProxyRoute(app: FastifyInstance) {
             promptTokens: 0,
             completionTokens: 0,
             totalTokens: 0,
+            groupMultiplierOverride: selected.channel.multiplier,
           });
         });
         await recordTokenRouterEventBestEffort('record channel success', () => (

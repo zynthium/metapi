@@ -235,6 +235,7 @@ type LoginFailureInfo = {
 };
 
 const ACCOUNT_HEALTH_REFRESH_TIMEOUT_MS = 10_000;
+const ACCOUNT_HEALTH_REFRESH_MAX_ATTEMPTS = 3;
 const ACCOUNT_VERIFY_TIMEOUT_MS = 10_000;
 const ACCOUNT_VERIFY_DIAG_TIMEOUT_MS = 2_500;
 
@@ -298,6 +299,33 @@ async function withTimeout<T>(
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+async function refreshBalanceWithHealthRetry(
+  accountId: number,
+  timeoutMs: number,
+  timeoutMessage: string,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= ACCOUNT_HEALTH_REFRESH_MAX_ATTEMPTS; attempt += 1) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+
+    try {
+      await withTimeout(
+        () => refreshBalance(accountId),
+        remainingMs,
+        timeoutMessage,
+      );
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error(timeoutMessage);
 }
 
 function isVerificationTimeoutError(error: unknown): boolean {
@@ -415,8 +443,8 @@ async function refreshRuntimeHealthForRow(
   }
 
   try {
-    await withTimeout(
-      () => refreshBalance(accountId),
+    await refreshBalanceWithHealthRetry(
+      accountId,
       ACCOUNT_HEALTH_REFRESH_TIMEOUT_MS,
       `站点健康检查超时（${Math.max(1, Math.round(ACCOUNT_HEALTH_REFRESH_TIMEOUT_MS / 1000))}s）`,
     );
@@ -431,6 +459,22 @@ async function refreshRuntimeHealthForRow(
       extraConfig: refreshedAccount?.extraConfig ?? row.accounts.extraConfig,
       sessionCapable: capabilities.canRefreshBalance,
     });
+
+    if (runtimeHealth.state === "unknown") {
+      const healthy = await setAccountRuntimeHealth(accountId, {
+        state: "healthy",
+        reason: "健康检查通过",
+        source: "health-refresh",
+      });
+      return {
+        accountId,
+        username,
+        siteName,
+        status: "success",
+        state: healthy?.state || "healthy",
+        message: healthy?.reason || "健康检查通过",
+      };
+    }
 
     return {
       accountId,

@@ -24,7 +24,7 @@ type SelectedChannel = Awaited<ReturnType<typeof tokenRouter.selectChannel>>;
 type SurfaceWarningScope = 'chat' | 'responses';
 
 type SurfaceSelectedChannel = {
-  channel: { routeId: number | null; id: number };
+  channel: { routeId: number | null; id: number; multiplier?: number | null };
   account: { id: number; username?: string | null };
   site: { name?: string | null };
   actualModel?: string | null;
@@ -403,6 +403,7 @@ export async function recordSurfaceSuccess(input: {
       site: input.selected.site,
       account: input.selected.account,
       modelName: input.modelName,
+      selectedGroupMultiplier: input.selected.channel.multiplier,
       parsedUsage: input.parsedUsage,
       resolvedUsage,
     });

@@ -929,7 +929,7 @@ describe('selectSurfaceChannelForAttempt', () => {
     const { recordSurfaceSuccess } = await import('./sharedSurface.js');
     const result = await recordSurfaceSuccess({
       selected: {
-        channel: { id: 11, routeId: 22 },
+        channel: { id: 11, routeId: 22, multiplier: 0.25 },
         account: { id: 33, username: 'oauth-user' },
         site: { id: 44, url: 'https://upstream.example.com', name: 'Codex OAuth' },
         tokenValue: 'live-token',
@@ -971,6 +971,7 @@ describe('selectSurfaceChannelForAttempt', () => {
       site: { id: 44, url: 'https://upstream.example.com', name: 'Codex OAuth' },
       account: { id: 33, username: 'oauth-user' },
       modelName: 'upstream-model',
+      selectedGroupMultiplier: 0.25,
       parsedUsage: {
         promptTokens: 10,
         completionTokens: 5,
@@ -990,7 +991,7 @@ describe('selectSurfaceChannelForAttempt', () => {
     expect(recordDownstreamCost).toHaveBeenCalledWith(0.42);
     expect(logSuccess).toHaveBeenCalledWith({
       selected: {
-        channel: { id: 11, routeId: 22 },
+        channel: { id: 11, routeId: 22, multiplier: 0.25 },
         account: { id: 33, username: 'oauth-user' },
         site: { id: 44, url: 'https://upstream.example.com', name: 'Codex OAuth' },
         tokenValue: 'live-token',

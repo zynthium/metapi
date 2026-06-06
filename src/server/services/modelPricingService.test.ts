@@ -1,12 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { createServer, type Server } from 'node:http';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   calculateModelUsageBreakdown,
   calculateModelUsageCost,
   fallbackTokenCost,
+  fetchGroupRatioForSite,
   type PricingModel,
 } from './modelPricingService.js';
 
 describe('modelPricingService', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('calculates token-based cost from model ratio and completion ratio', () => {
     const model: PricingModel = {
       modelName: 'gpt-4o',
@@ -28,6 +34,30 @@ describe('modelPricingService', () => {
     );
 
     expect(cost).toBe(0.014);
+  });
+
+  it('uses an explicit selected channel group multiplier for token-based cost', () => {
+    const model: PricingModel = {
+      modelName: 'gpt-4o',
+      quotaType: 0,
+      modelRatio: 2,
+      completionRatio: 1.5,
+      modelPrice: null,
+      enableGroups: ['default', 'vip'],
+    };
+
+    const cost = calculateModelUsageCost(
+      model,
+      {
+        promptTokens: 1000,
+        completionTokens: 500,
+        totalTokens: 1500,
+      },
+      { default: 1, vip: 4 },
+      0.25,
+    );
+
+    expect(cost).toBe(0.00175);
   });
 
   it('falls back to total tokens when split token usage is missing', () => {
@@ -182,5 +212,167 @@ describe('modelPricingService', () => {
   it('uses platform-specific fallback token divisor', () => {
     expect(fallbackTokenCost(1500, 'new-api')).toBe(0.003);
     expect(fallbackTokenCost(1500, 'veloera')).toBe(0.0015);
+  });
+
+  it('fetches sub2api group rate multipliers from available groups endpoint', async () => {
+    let requestedPath = '';
+    const server = await new Promise<Server>((resolve) => {
+      const instance = createServer((req, res) => {
+        requestedPath = req.url || '';
+        if (req.url === '/api/v1/groups/available') {
+          expect(req.headers.authorization).toBe('Bearer jwt-token');
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            code: 0,
+            message: 'success',
+            data: [
+              { id: 1, name: 'default', rate_multiplier: 1 },
+              { id: 2, name: 'vip', rate_multiplier: 0.3 },
+              { id: 3, name: 'premium', rate_multiplier: '2.5' },
+            ],
+          }));
+          return;
+        }
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ code: 404, message: 'not found' }));
+      });
+      instance.listen(0, '127.0.0.1', () => resolve(instance));
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('test server failed to listen');
+
+    try {
+      const groupRatio = await fetchGroupRatioForSite(
+        { id: 1, url: `http://127.0.0.1:${address.port}`, platform: 'sub2api' },
+        'jwt-token',
+      );
+
+      expect(requestedPath).toBe('/api/v1/groups/available');
+      expect(groupRatio).toEqual({
+        '1': 1,
+        '2': 0.3,
+        '3': 2.5,
+        default: 1,
+        vip: 0.3,
+        premium: 2.5,
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it('fetches new-api group ratios from user self groups endpoint', async () => {
+    const requestedPaths: string[] = [];
+    const server = await new Promise<Server>((resolve) => {
+      const instance = createServer((req, res) => {
+        requestedPaths.push(req.url || '');
+        if (req.url === '/api/user/self/groups') {
+          expect(req.headers.authorization).toBe('Bearer session-token');
+          expect(req.headers['new-api-user']).toBe('4019');
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            success: true,
+            data: [
+              { group: 'default', ratio: 1 },
+              { name: 'vip', ratio: 0.5 },
+              { group_name: 'premium', rate_multiplier: 2 },
+            ],
+          }));
+          return;
+        }
+        if (req.url === '/api/user/groups') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, data: { stale: { ratio: 9 } } }));
+          return;
+        }
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ code: 404, message: 'not found' }));
+      });
+      instance.listen(0, '127.0.0.1', () => resolve(instance));
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('test server failed to listen');
+
+    try {
+      const groupRatio = await fetchGroupRatioForSite(
+        { id: 1, url: `http://127.0.0.1:${address.port}`, platform: 'new-api' },
+        'session-token',
+        4019,
+      );
+
+      expect(requestedPaths[0]).toBe('/api/user/self/groups');
+      expect(requestedPaths).not.toContain('/api/user/groups');
+      expect(groupRatio).toEqual({
+        default: 1,
+        vip: 0.5,
+        premium: 2,
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it('retries transient new-api group ratio fetch failures', async () => {
+    let selfGroupAttempts = 0;
+    const requestedPaths: string[] = [];
+    const server = await new Promise<Server>((resolve) => {
+      const instance = createServer((req, res) => {
+        requestedPaths.push(req.url || '');
+        if (req.url === '/api/user/self/groups') {
+          selfGroupAttempts += 1;
+          expect(req.headers.authorization).toBe('Bearer unstable-session-token');
+          expect(req.headers['new-api-user']).toBe('198');
+          if (selfGroupAttempts === 1) {
+            req.socket.destroy();
+            return;
+          }
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            success: true,
+            data: {
+              default: { ratio: 1 },
+              'claude反代kiro': { ratio: 0.07 },
+              'codex超低渠道': { ratio: 0.06 },
+            },
+          }));
+          return;
+        }
+        if (req.url === '/api/user/groups') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, data: { stale: { ratio: 9 } } }));
+          return;
+        }
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ code: 404, message: 'not found' }));
+      });
+      instance.listen(0, '127.0.0.1', () => resolve(instance));
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('test server failed to listen');
+
+    try {
+      const groupRatio = await fetchGroupRatioForSite(
+        { id: 1, url: `http://127.0.0.1:${address.port}`, platform: 'new-api' },
+        'unstable-session-token',
+        198,
+      );
+
+      expect(selfGroupAttempts).toBe(2);
+      expect(requestedPaths).toEqual(['/api/user/self/groups', '/api/user/self/groups']);
+      expect(groupRatio).toEqual({
+        default: 1,
+        'claude反代kiro': 0.07,
+        'codex超低渠道': 0.06,
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 });

@@ -1324,7 +1324,7 @@ type CandidateEligibilityOptions = {
 
 type CostSignal = {
   unitCost: number;
-  source: 'observed' | 'configured' | 'catalog' | 'fallback';
+  source: 'observed' | 'configured' | 'catalog' | 'fallback' | 'channel';
 };
 
 export function isRegexModelPattern(pattern: string): boolean {
@@ -1606,6 +1606,34 @@ function resolveEffectiveUnitCost(candidate: RouteChannelCandidate, modelName: s
     unitCost: Math.max(config.routingFallbackUnitCost || 1, MIN_EFFECTIVE_UNIT_COST),
     source: 'fallback',
   };
+}
+
+function resolveLowestMultiplierCost(candidate: RouteChannelCandidate, modelName: string): CostSignal {
+  const channelMultiplier = candidate.channel.multiplier;
+  if (
+    typeof channelMultiplier === 'number'
+    && Number.isFinite(channelMultiplier)
+    && channelMultiplier > 0
+    && channelMultiplier !== 1
+  ) {
+    return {
+      unitCost: Math.max(channelMultiplier, MIN_EFFECTIVE_UNIT_COST),
+      source: 'channel',
+    };
+  }
+
+  return resolveEffectiveUnitCost(candidate, modelName);
+}
+
+function formatCostSignal(signal: CostSignal): string {
+  const sourceText = signal.source === 'observed'
+    ? '实测'
+    : (signal.source === 'configured'
+      ? '配置'
+      : (signal.source === 'catalog'
+        ? '目录'
+        : (signal.source === 'channel' ? '手工覆盖' : '默认')));
+  return `${sourceText}:${signal.unitCost.toFixed(6)}`;
 }
 
 type SiteHistoricalHealthMetrics = {
@@ -2299,6 +2327,13 @@ export class TokenRouter {
 
     if (routeStrategy === 'lowest_multiplier') {
       const breakerFiltered = filterSiteRuntimeBrokenCandidatesByModel(available, runtimeModelResolver, nowMs);
+      const resolveLowestCostModelName = (candidate: RouteChannelCandidate) =>
+        resolveActualModelForSelectedChannel(
+          requestedModel,
+          match.route,
+          mappedModel,
+          candidate.channel.sourceModel,
+        );
       if (breakerFiltered.avoided.length > 0) {
         for (const item of breakerFiltered.avoided) {
           const target = candidateMap.get(item.candidate.channel.id);
@@ -2312,8 +2347,8 @@ export class TokenRouter {
       }
 
       const sorted = [...breakerFiltered.candidates].sort((a, b) => {
-        const multA = a.channel.multiplier ?? 1.0;
-        const multB = b.channel.multiplier ?? 1.0;
+        const multA = resolveLowestMultiplierCost(a, resolveLowestCostModelName(a)).unitCost;
+        const multB = resolveLowestMultiplierCost(b, resolveLowestCostModelName(b)).unitCost;
         if (multA !== multB) return multA - multB;
         return (a.channel.priority ?? 0) - (b.channel.priority ?? 0);
       });
@@ -2336,10 +2371,13 @@ export class TokenRouter {
         const target = candidateMap.get(sorted[index].channel.id);
         if (!target || !target.eligible) continue;
         target.probability = index === 0 ? 100 : 0;
-        const mult = sorted[index].channel.multiplier ?? 1.0;
+        const costSignal = resolveLowestMultiplierCost(sorted[index], resolveLowestCostModelName(sorted[index]));
+        const selectedCostSignal = sorted[0]
+          ? resolveLowestMultiplierCost(sorted[0], resolveLowestCostModelName(sorted[0]))
+          : costSignal;
         target.reason = index === 0
-          ? `最低倍率命中（multiplier=${mult}，共 ${sorted.length} 个可用通道）`
-          : `倍率 ${mult}，高于选中的 ${sorted[0]?.channel.multiplier ?? 1.0}`;
+          ? `最低有效成本命中（有效成本=${formatCostSignal(costSignal)}，共 ${sorted.length} 个可用通道）`
+          : `有效成本=${formatCostSignal(costSignal)}，高于选中的 ${formatCostSignal(selectedCostSignal)}`;
         if (index === 0) {
           selected = sorted[index];
         }
@@ -2368,8 +2406,9 @@ export class TokenRouter {
         mappedModel,
         selected.channel.sourceModel,
       );
-      summary.push(`最低倍率：可用 ${sorted.length}，按 multiplier 升序`);
-      summary.push(`最终选择：${selectedLabel}（multiplier=${selected.channel.multiplier ?? 1.0}）`);
+      const selectedCostSignal = resolveLowestMultiplierCost(selected, actualModel);
+      summary.push(`最低倍率：可用 ${sorted.length}，按有效成本升序`);
+      summary.push(`最终选择：${selectedLabel}（有效成本=${formatCostSignal(selectedCostSignal)}）`);
       if (actualModel !== mappedModel) {
         summary.push(`实际转发模型：${actualModel}`);
       }
@@ -2996,9 +3035,16 @@ export class TokenRouter {
       });
       if (multiplierCandidates.length === 0) return null;
       const breakerFiltered = filterSiteRuntimeBrokenCandidatesByModel(multiplierCandidates, runtimeModelResolver, nowMs);
+      const resolveLowestCostModelName = (candidate: RouteChannelCandidate) =>
+        resolveActualModelForSelectedChannel(
+          requestedModel,
+          match.route,
+          mappedModel,
+          candidate.channel.sourceModel,
+        );
       const sorted = [...breakerFiltered.candidates].sort((a, b) => {
-        const multA = a.channel.multiplier ?? 1.0;
-        const multB = b.channel.multiplier ?? 1.0;
+        const multA = resolveLowestMultiplierCost(a, resolveLowestCostModelName(a)).unitCost;
+        const multB = resolveLowestMultiplierCost(b, resolveLowestCostModelName(b)).unitCost;
         if (multA !== multB) return multA - multB;
         return (a.channel.priority ?? 0) - (b.channel.priority ?? 0);
       });

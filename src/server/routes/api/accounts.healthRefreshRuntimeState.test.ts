@@ -109,6 +109,52 @@ describe('accounts health refresh runtime state', () => {
     });
   });
 
+  it('retries health refresh before marking an account unhealthy', async () => {
+    const site = await db.insert(schema.sites).values({
+      name: 'Retry Site',
+      url: 'https://retry.example.com',
+      platform: 'done-hub',
+    }).returning().get();
+
+    const account = await db.insert(schema.accounts).values({
+      siteId: site.id,
+      username: 'retry-user',
+      accessToken: 'token',
+      status: 'active',
+    }).returning().get();
+
+    refreshBalanceMock
+      .mockRejectedValueOnce(new Error('temporary upstream error'))
+      .mockResolvedValueOnce({ balance: 100, used: 0, quota: 100 });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/accounts/health/refresh',
+      payload: { accountId: account.id, wait: true },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      success: boolean;
+      summary: {
+        healthy: number;
+        failed: number;
+      };
+      results: Array<{ status: string; state: string; message: string }>;
+    };
+
+    expect(body.success).toBe(true);
+    expect(body.summary).toMatchObject({
+      healthy: 1,
+      failed: 0,
+    });
+    expect(body.results[0]).toMatchObject({
+      status: 'success',
+      state: 'healthy',
+    });
+    expect(refreshBalanceMock).toHaveBeenCalledTimes(2);
+  });
+
   it('rejects non-boolean wait payload when refreshing health', async () => {
     const response = await app.inject({
       method: 'POST',

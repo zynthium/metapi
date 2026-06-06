@@ -1,8 +1,8 @@
 ﻿import { and, eq, ne } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { getInsertedRowId } from '../db/insertHelpers.js';
-import { getCredentialModeFromExtraConfig } from './accountExtraConfig.js';
-import { getCachedGroupRatio } from './modelPricingService.js';
+import { getCredentialModeFromExtraConfig, resolvePlatformUserId } from './accountExtraConfig.js';
+import { fetchGroupRatioForSite } from './modelPricingService.js';
 
 type UpstreamApiToken = {
   name?: string | null;
@@ -486,11 +486,34 @@ export async function listTokensWithRelations(accountId?: number) {
     ? await base.where(eq(schema.accountTokens.accountId, accountId)).all()
     : await base.all();
 
+  const groupRatioByAccount = new Map<string, Promise<Record<string, number> | null>>();
+  await Promise.all(
+    rows.map((row) => {
+      const key = `${row.sites.id}:${row.accounts.id}`;
+      if (groupRatioByAccount.has(key)) return groupRatioByAccount.get(key)!;
+
+      const promise = (async () => {
+        const token = row.accounts.accessToken || row.accounts.apiToken || null;
+        if (!token) return null;
+
+        const platformUserId = resolvePlatformUserId(row.accounts.extraConfig, row.accounts.username);
+        return await fetchGroupRatioForSite(row.sites, token, platformUserId);
+      })();
+      groupRatioByAccount.set(key, promise);
+      return promise;
+    }),
+  );
+
+  const resolvedGroupRatioByAccount = new Map<string, Record<string, number> | null>();
+  for (const [key, promise] of groupRatioByAccount.entries()) {
+    resolvedGroupRatioByAccount.set(key, await promise);
+  }
+
   return rows
     .filter((row) => !isApiKeyConnection(row.accounts))
     .map((row) => {
     const { token, tokenGroup, ...tokenMeta } = row.account_tokens;
-    const groupRatio = getCachedGroupRatio(row.sites.id, row.accounts.id);
+    const groupRatio = resolvedGroupRatioByAccount.get(`${row.sites.id}:${row.accounts.id}`) || null;
     const groupMultiplier = groupRatio && tokenGroup && typeof groupRatio[tokenGroup] === 'number'
       ? groupRatio[tokenGroup]
       : null;

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const estimateProxyCostMock = vi.fn();
 const buildProxyBillingDetailsMock = vi.fn();
@@ -11,6 +11,11 @@ vi.mock('./modelPricingService.js', () => ({
 import { resolveProxyLogBilling } from './proxyBilling.js';
 
 describe('resolveProxyLogBilling', () => {
+  beforeEach(() => {
+    estimateProxyCostMock.mockReset();
+    buildProxyBillingDetailsMock.mockReset();
+  });
+
   it('uses self-log billing metadata for detail breakdown while preserving quota-derived total cost', async () => {
     estimateProxyCostMock.mockResolvedValue(0.010001);
     buildProxyBillingDetailsMock.mockResolvedValue({
@@ -106,5 +111,51 @@ describe('resolveProxyLogBilling', () => {
         totalCost: 0.083057,
       },
     });
+  });
+
+  it('forwards the selected channel multiplier to pricing estimates', async () => {
+    estimateProxyCostMock.mockResolvedValue(0.0025);
+    buildProxyBillingDetailsMock.mockResolvedValue({
+      pricing: { groupRatio: 0.25 },
+      breakdown: { totalCost: 0.0025 },
+    });
+
+    await resolveProxyLogBilling({
+      site: {
+        id: 1,
+        url: 'https://upstream.example.com',
+        platform: 'new-api',
+      },
+      account: {
+        id: 2,
+      },
+      modelName: 'gpt-4o',
+      selectedGroupMultiplier: 0.25,
+      parsedUsage: {
+        promptTokens: 1000,
+        completionTokens: 500,
+        totalTokens: 1500,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        promptTokensIncludeCache: null,
+      },
+      resolvedUsage: {
+        promptTokens: 1000,
+        completionTokens: 500,
+        totalTokens: 1500,
+        recoveredFromSelfLog: false,
+        estimatedCostFromQuota: 0,
+        selfLogBillingMeta: null,
+      },
+    });
+
+    expect(estimateProxyCostMock).toHaveBeenCalledWith(expect.objectContaining({
+      groupMultiplierOverride: 0.25,
+      billingPricingOverride: null,
+    }));
+    expect(buildProxyBillingDetailsMock).toHaveBeenCalledWith(expect.objectContaining({
+      groupMultiplierOverride: 0.25,
+      billingPricingOverride: null,
+    }));
   });
 });

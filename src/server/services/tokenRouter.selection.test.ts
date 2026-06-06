@@ -676,6 +676,119 @@ describe('TokenRouter selection scoring', () => {
     expect(fallbackCandidate?.reason || '').toContain('成本=默认:100.000000');
   });
 
+  it('uses effective unit cost for lowest-multiplier selection when channel multiplier is not overridden', async () => {
+    const route = await db.insert(schema.tokenRoutes).values({
+      modelPattern: 'gpt-5-lowest-cost',
+      routingStrategy: 'lowest_multiplier',
+      enabled: true,
+    }).returning().get();
+
+    const cheapSite = await createSite('lowest-cheap-site');
+    const cheapAccount = await db.insert(schema.accounts).values({
+      siteId: cheapSite.id,
+      username: `lowest-cheap-user-${nextId()}`,
+      accessToken: `access-${nextId()}`,
+      apiToken: `sk-${nextId()}`,
+      status: 'active',
+      unitCost: 0.2,
+    }).returning().get();
+    const cheapToken = await createToken(cheapAccount.id, 'lowest-cheap-token');
+    await db.insert(schema.routeChannels).values({
+      routeId: route.id,
+      accountId: cheapAccount.id,
+      tokenId: cheapToken.id,
+      priority: 1,
+      weight: 10,
+      enabled: true,
+    }).run();
+
+    const expensiveSite = await createSite('lowest-expensive-site');
+    const expensiveAccount = await db.insert(schema.accounts).values({
+      siteId: expensiveSite.id,
+      username: `lowest-expensive-user-${nextId()}`,
+      accessToken: `access-${nextId()}`,
+      apiToken: `sk-${nextId()}`,
+      status: 'active',
+      unitCost: 2,
+    }).returning().get();
+    const expensiveToken = await createToken(expensiveAccount.id, 'lowest-expensive-token');
+    await db.insert(schema.routeChannels).values({
+      routeId: route.id,
+      accountId: expensiveAccount.id,
+      tokenId: expensiveToken.id,
+      priority: 0,
+      weight: 10,
+      enabled: true,
+    }).run();
+
+    const decision = await new TokenRouter().explainSelection('gpt-5-lowest-cost');
+    const cheapCandidate = decision.candidates.find((candidate) => candidate.siteName.startsWith('lowest-cheap-site'));
+    const expensiveCandidate = decision.candidates.find((candidate) => candidate.siteName.startsWith('lowest-expensive-site'));
+
+    expect(cheapCandidate).toBeTruthy();
+    expect(expensiveCandidate).toBeTruthy();
+    expect(cheapCandidate?.probability).toBe(100);
+    expect(expensiveCandidate?.probability).toBe(0);
+    expect(cheapCandidate?.reason || '').toContain('有效成本=配置:0.200000');
+  });
+
+  it('keeps non-default channel multiplier as a lowest-multiplier manual override', async () => {
+    const route = await db.insert(schema.tokenRoutes).values({
+      modelPattern: 'gpt-5-lowest-override',
+      routingStrategy: 'lowest_multiplier',
+      enabled: true,
+    }).returning().get();
+
+    const cheapSite = await createSite('override-cheap-site');
+    const cheapAccount = await db.insert(schema.accounts).values({
+      siteId: cheapSite.id,
+      username: `override-cheap-user-${nextId()}`,
+      accessToken: `access-${nextId()}`,
+      apiToken: `sk-${nextId()}`,
+      status: 'active',
+      unitCost: 0.2,
+    }).returning().get();
+    const cheapToken = await createToken(cheapAccount.id, 'override-cheap-token');
+    await db.insert(schema.routeChannels).values({
+      routeId: route.id,
+      accountId: cheapAccount.id,
+      tokenId: cheapToken.id,
+      priority: 0,
+      weight: 10,
+      enabled: true,
+    }).run();
+
+    const overrideSite = await createSite('override-manual-site');
+    const overrideAccount = await db.insert(schema.accounts).values({
+      siteId: overrideSite.id,
+      username: `override-manual-user-${nextId()}`,
+      accessToken: `access-${nextId()}`,
+      apiToken: `sk-${nextId()}`,
+      status: 'active',
+      unitCost: 2,
+    }).returning().get();
+    const overrideToken = await createToken(overrideAccount.id, 'override-manual-token');
+    await db.insert(schema.routeChannels).values({
+      routeId: route.id,
+      accountId: overrideAccount.id,
+      tokenId: overrideToken.id,
+      priority: 1,
+      weight: 10,
+      multiplier: 0.05,
+      enabled: true,
+    }).run();
+
+    const decision = await new TokenRouter().explainSelection('gpt-5-lowest-override');
+    const cheapCandidate = decision.candidates.find((candidate) => candidate.siteName.startsWith('override-cheap-site'));
+    const overrideCandidate = decision.candidates.find((candidate) => candidate.siteName.startsWith('override-manual-site'));
+
+    expect(cheapCandidate).toBeTruthy();
+    expect(overrideCandidate).toBeTruthy();
+    expect(overrideCandidate?.probability).toBe(100);
+    expect(cheapCandidate?.probability).toBe(0);
+    expect(overrideCandidate?.reason || '').toContain('有效成本=手工覆盖:0.050000');
+  });
+
   it('downweights a site after transient failures and restores it quickly after success', async () => {
     config.routingWeights = {
       baseWeightFactor: 1,

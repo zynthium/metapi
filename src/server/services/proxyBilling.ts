@@ -37,6 +37,7 @@ interface ResolveProxyLogBillingInput {
     apiToken?: string | null;
   };
   modelName: string;
+  selectedGroupMultiplier?: number | null;
   parsedUsage: ProxyBillingUsageSummary;
   resolvedUsage: ResolvedProxyUsageSummary;
 }
@@ -73,6 +74,7 @@ export async function resolveProxyLogBilling(
     cacheCreationTokens,
     promptTokensIncludeCache,
     billingPricingOverride,
+    groupMultiplierOverride: billingPricingOverride ? null : input.selectedGroupMultiplier,
   };
 
   let estimatedCost = await estimateProxyCost(billingInput);

@@ -185,6 +185,7 @@ export async function completionsProxyRoute(app: FastifyInstance) {
             site: selected.site,
             account: selected.account,
             modelName: selected.actualModel || requestedModel,
+            selectedGroupMultiplier: selected.channel.multiplier,
             parsedUsage,
             resolvedUsage,
           });
@@ -287,6 +288,7 @@ export async function completionsProxyRoute(app: FastifyInstance) {
           site: selected.site,
           account: selected.account,
           modelName: selected.actualModel || requestedModel,
+          selectedGroupMultiplier: selected.channel.multiplier,
           parsedUsage,
           resolvedUsage,
         });
