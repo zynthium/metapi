@@ -1,8 +1,8 @@
 ﻿import { and, eq, ne } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { getInsertedRowId } from '../db/insertHelpers.js';
-import { getCredentialModeFromExtraConfig, resolvePlatformUserId } from './accountExtraConfig.js';
-import { fetchGroupRatioForSite } from './modelPricingService.js';
+import { getCredentialModeFromExtraConfig } from './accountExtraConfig.js';
+import { getAccountGroupRatioMap } from './accountGroupRatioStore.js';
 
 type UpstreamApiToken = {
   name?: string | null;
@@ -486,25 +486,19 @@ export async function listTokensWithRelations(accountId?: number) {
     ? await base.where(eq(schema.accountTokens.accountId, accountId)).all()
     : await base.all();
 
-  const groupRatioByAccount = new Map<string, Promise<Record<string, number> | null>>();
+  const groupRatioByAccount = new Map<string, Promise<Awaited<ReturnType<typeof getAccountGroupRatioMap>>>>();
   await Promise.all(
     rows.map((row) => {
       const key = `${row.sites.id}:${row.accounts.id}`;
       if (groupRatioByAccount.has(key)) return groupRatioByAccount.get(key)!;
 
-      const promise = (async () => {
-        const token = row.accounts.accessToken || row.accounts.apiToken || null;
-        if (!token) return null;
-
-        const platformUserId = resolvePlatformUserId(row.accounts.extraConfig, row.accounts.username);
-        return await fetchGroupRatioForSite(row.sites, token, platformUserId);
-      })();
+      const promise = getAccountGroupRatioMap(row.accounts.id, row.sites.id);
       groupRatioByAccount.set(key, promise);
       return promise;
     }),
   );
 
-  const resolvedGroupRatioByAccount = new Map<string, Record<string, number> | null>();
+  const resolvedGroupRatioByAccount = new Map<string, Awaited<ReturnType<typeof getAccountGroupRatioMap>>>();
   for (const [key, promise] of groupRatioByAccount.entries()) {
     resolvedGroupRatioByAccount.set(key, await promise);
   }
@@ -513,9 +507,10 @@ export async function listTokensWithRelations(accountId?: number) {
     .filter((row) => !isApiKeyConnection(row.accounts))
     .map((row) => {
     const { token, tokenGroup, ...tokenMeta } = row.account_tokens;
-    const groupRatio = resolvedGroupRatioByAccount.get(`${row.sites.id}:${row.accounts.id}`) || null;
-    const groupMultiplier = groupRatio && tokenGroup && typeof groupRatio[tokenGroup] === 'number'
-      ? groupRatio[tokenGroup]
+    const groupRatio = resolvedGroupRatioByAccount.get(`${row.sites.id}:${row.accounts.id}`);
+    const ratio = tokenGroup ? groupRatio?.[tokenGroup] : null;
+    const groupMultiplier = ratio && typeof ratio.multiplier === 'number'
+      ? ratio.multiplier
       : null;
     return {
       ...tokenMeta,
@@ -523,6 +518,9 @@ export async function listTokensWithRelations(accountId?: number) {
       valueStatus: resolveAccountTokenValueStatus(row.account_tokens),
       tokenMasked: maskToken(token, row.sites.platform),
       groupMultiplier,
+      groupMultiplierRefreshedAt: ratio?.refreshedAt ?? null,
+      groupMultiplierLastError: ratio?.lastError ?? null,
+      groupMultiplierStale: !!ratio?.lastError,
       account: {
         id: row.accounts.id,
         username: row.accounts.username,

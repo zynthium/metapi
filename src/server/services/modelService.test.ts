@@ -1,5 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createServer, type Server } from 'node:http';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +6,12 @@ import { and, eq } from 'drizzle-orm';
 
 type DbModule = typeof import('../db/index.js');
 type ModelServiceModule = typeof import('./modelService.js');
+
+const fetchGroupRatioForSiteMock = vi.fn();
+
+vi.mock('./modelPricingService.js', () => ({
+  fetchGroupRatioForSite: (...args: unknown[]) => fetchGroupRatioForSiteMock(...args),
+}));
 
 describe('rebuildTokenRoutesFromAvailability', () => {
   let db: DbModule['db'];
@@ -28,6 +33,8 @@ describe('rebuildTokenRoutesFromAvailability', () => {
   });
 
   beforeEach(async () => {
+    fetchGroupRatioForSiteMock.mockReset();
+    await db.delete(schema.accountGroupRatios).run();
     await db.delete(schema.routeChannels).run();
     await db.delete(schema.tokenRoutes).run();
     await db.delete(schema.tokenModelAvailability).run();
@@ -334,179 +341,195 @@ describe('rebuildTokenRoutesFromAvailability', () => {
     expect(wildcardRouteAfter).toBeDefined();
   });
 
-  it('uses new-api account user id when fetching token group multipliers for rebuilt channels', async () => {
-    const requestedHeaders: Array<{ authorization?: string | string[]; newApiUser?: string | string[] }> = [];
-    const server = await new Promise<Server>((resolve) => {
-      const instance = createServer((req, res) => {
-        if (req.url === '/api/user/self/groups') {
-          requestedHeaders.push({
-            authorization: req.headers.authorization,
-            newApiUser: req.headers['new-api-user'],
-          });
-          if (req.headers.authorization !== 'Bearer session-token' || req.headers['new-api-user'] !== '198') {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, message: 'Unauthorized, New-Api-User header not provided' }));
-            return;
-          }
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            success: true,
-            data: {
-              default: { ratio: 1 },
-              'codex超低渠道': { ratio: 0.06 },
-            },
-          }));
-          return;
-        }
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: false, message: 'not found' }));
-      });
-      instance.listen(0, '127.0.0.1', () => resolve(instance));
-    });
-    const address = server.address();
-    if (!address || typeof address === 'string') throw new Error('test server failed to listen');
+  it('uses persisted token group multipliers for rebuilt channels', async () => {
+    fetchGroupRatioForSiteMock.mockResolvedValue({ 'codex超低渠道': 0.99 });
 
-    try {
-      const site = await db.insert(schema.sites).values({
-        name: 'new-api-site',
-        url: `http://127.0.0.1:${address.port}`,
-        platform: 'new-api',
-      }).returning().get();
+    const site = await db.insert(schema.sites).values({
+      name: 'new-api-site',
+      url: 'https://new-api-site.example.com',
+      platform: 'new-api',
+    }).returning().get();
 
-      const account = await db.insert(schema.accounts).values({
-        siteId: site.id,
-        username: 'new-api-user',
-        accessToken: 'session-token',
-        status: 'active',
-        extraConfig: JSON.stringify({ platformUserId: 198 }),
-      }).returning().get();
+    const account = await db.insert(schema.accounts).values({
+      siteId: site.id,
+      username: 'new-api-user',
+      accessToken: 'session-token',
+      status: 'active',
+      extraConfig: JSON.stringify({ platformUserId: 198 }),
+    }).returning().get();
 
-      const token = await db.insert(schema.accountTokens).values({
-        accountId: account.id,
-        name: 'codex-low',
-        token: 'sk-codex-low',
-        tokenGroup: 'codex超低渠道',
-        source: 'sync',
-        enabled: true,
-        isDefault: true,
-      }).returning().get();
+    const token = await db.insert(schema.accountTokens).values({
+      accountId: account.id,
+      name: 'codex-low',
+      token: 'sk-codex-low',
+      tokenGroup: 'codex超低渠道',
+      source: 'sync',
+      enabled: true,
+      isDefault: true,
+    }).returning().get();
 
-      await db.insert(schema.tokenModelAvailability).values({
-        tokenId: token.id,
-        modelName: 'claude-sonnet-4',
-        available: true,
-      }).run();
+    await db.insert(schema.accountGroupRatios).values({
+      accountId: account.id,
+      siteId: site.id,
+      groupName: 'codex超低渠道',
+      multiplier: 0.06,
+      refreshedAt: '2026-06-07T01:00:00.000Z',
+      createdAt: '2026-06-07T01:00:00.000Z',
+      updatedAt: '2026-06-07T01:00:00.000Z',
+    }).run();
 
-      const rebuild = await rebuildTokenRoutesFromAvailability();
+    await db.insert(schema.tokenModelAvailability).values({
+      tokenId: token.id,
+      modelName: 'claude-sonnet-4',
+      available: true,
+    }).run();
 
-      expect(rebuild.models).toBe(1);
-      expect(requestedHeaders[0]).toEqual({
-        authorization: 'Bearer session-token',
-        newApiUser: '198',
-      });
+    const rebuild = await rebuildTokenRoutesFromAvailability();
 
-      const route = await db.select().from(schema.tokenRoutes)
-        .where(eq(schema.tokenRoutes.modelPattern, 'claude-sonnet-4'))
-        .get();
-      expect(route).toBeDefined();
+    expect(rebuild.models).toBe(1);
+    expect(fetchGroupRatioForSiteMock).not.toHaveBeenCalled();
 
-      const channels = await db.select().from(schema.routeChannels)
-        .where(and(
-          eq(schema.routeChannels.routeId, route!.id),
-          eq(schema.routeChannels.accountId, account.id),
-          eq(schema.routeChannels.tokenId, token.id),
-        ))
-        .all();
+    const route = await db.select().from(schema.tokenRoutes)
+      .where(eq(schema.tokenRoutes.modelPattern, 'claude-sonnet-4'))
+      .get();
+    expect(route).toBeDefined();
 
-      expect(channels).toHaveLength(1);
-      expect(channels[0]?.multiplier).toBe(0.06);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+    const channels = await db.select().from(schema.routeChannels)
+      .where(and(
+        eq(schema.routeChannels.routeId, route!.id),
+        eq(schema.routeChannels.accountId, account.id),
+        eq(schema.routeChannels.tokenId, token.id),
+      ))
+      .all();
+
+    expect(channels).toHaveLength(1);
+    expect(channels[0]?.multiplier).toBe(0.06);
   });
 
-  it('updates existing automatic route channel multiplier from token group ratio', async () => {
-    const server = await new Promise<Server>((resolve) => {
-      const instance = createServer((req, res) => {
-        if (req.url === '/api/user/self/groups') {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            success: true,
-            data: {
-              default: { ratio: 1 },
-              codex: { ratio: 0.1 },
-            },
-          }));
-          return;
-        }
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: false, message: 'not found' }));
-      });
-      instance.listen(0, '127.0.0.1', () => resolve(instance));
-    });
-    const address = server.address();
-    if (!address || typeof address === 'string') throw new Error('test server failed to listen');
+  it('updates existing automatic route channel multiplier from persisted token group ratio', async () => {
+    fetchGroupRatioForSiteMock.mockResolvedValue({ codex: 0.99 });
 
-    try {
-      const site = await db.insert(schema.sites).values({
-        name: 'new-api-site-existing-channel',
-        url: `http://127.0.0.1:${address.port}`,
-        platform: 'new-api',
-      }).returning().get();
+    const site = await db.insert(schema.sites).values({
+      name: 'new-api-site-existing-channel',
+      url: 'https://new-api-site-existing-channel.example.com',
+      platform: 'new-api',
+    }).returning().get();
 
-      const account = await db.insert(schema.accounts).values({
-        siteId: site.id,
-        username: 'new-api-user',
-        accessToken: 'session-token',
-        status: 'active',
-        extraConfig: JSON.stringify({ platformUserId: 4019 }),
-      }).returning().get();
+    const account = await db.insert(schema.accounts).values({
+      siteId: site.id,
+      username: 'new-api-user',
+      accessToken: 'session-token',
+      status: 'active',
+      extraConfig: JSON.stringify({ platformUserId: 4019 }),
+    }).returning().get();
 
-      const token = await db.insert(schema.accountTokens).values({
-        accountId: account.id,
-        name: 'codex',
-        token: 'sk-codex',
-        tokenGroup: 'codex',
-        source: 'sync',
-        enabled: true,
-        isDefault: true,
-      }).returning().get();
+    const token = await db.insert(schema.accountTokens).values({
+      accountId: account.id,
+      name: 'codex',
+      token: 'sk-codex',
+      tokenGroup: 'codex',
+      source: 'sync',
+      enabled: true,
+      isDefault: true,
+    }).returning().get();
 
-      await db.insert(schema.tokenModelAvailability).values({
-        tokenId: token.id,
-        modelName: 'gpt-5.3-codex',
-        available: true,
-      }).run();
+    await db.insert(schema.accountGroupRatios).values({
+      accountId: account.id,
+      siteId: site.id,
+      groupName: 'codex',
+      multiplier: 0.1,
+      refreshedAt: '2026-06-07T01:00:00.000Z',
+      createdAt: '2026-06-07T01:00:00.000Z',
+      updatedAt: '2026-06-07T01:00:00.000Z',
+    }).run();
 
-      const route = await db.insert(schema.tokenRoutes).values({
-        modelPattern: 'gpt-5.3-codex',
-        enabled: true,
-      }).returning().get();
+    await db.insert(schema.tokenModelAvailability).values({
+      tokenId: token.id,
+      modelName: 'gpt-5.3-codex',
+      available: true,
+    }).run();
 
-      const channel = await db.insert(schema.routeChannels).values({
-        routeId: route.id,
-        accountId: account.id,
-        tokenId: token.id,
-        priority: 0,
-        weight: 10,
-        multiplier: 1,
-        enabled: true,
-        manualOverride: false,
-      }).returning().get();
+    const route = await db.insert(schema.tokenRoutes).values({
+      modelPattern: 'gpt-5.3-codex',
+      enabled: true,
+    }).returning().get();
 
-      const rebuild = await rebuildTokenRoutesFromAvailability();
+    const channel = await db.insert(schema.routeChannels).values({
+      routeId: route.id,
+      accountId: account.id,
+      tokenId: token.id,
+      priority: 0,
+      weight: 10,
+      multiplier: 1,
+      enabled: true,
+      manualOverride: false,
+    }).returning().get();
 
-      expect(rebuild.updatedChannels).toBe(1);
-      const refreshed = await db.select().from(schema.routeChannels)
-        .where(eq(schema.routeChannels.id, channel.id))
-        .get();
-      expect(refreshed?.multiplier).toBe(0.1);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+    const rebuild = await rebuildTokenRoutesFromAvailability();
+
+    expect(fetchGroupRatioForSiteMock).not.toHaveBeenCalled();
+    expect(rebuild.updatedChannels).toBe(1);
+    const refreshed = await db.select().from(schema.routeChannels)
+      .where(eq(schema.routeChannels.id, channel.id))
+      .get();
+    expect(refreshed?.multiplier).toBe(0.1);
+  });
+
+  it('keeps an existing automatic route channel multiplier when no persisted ratio exists', async () => {
+    fetchGroupRatioForSiteMock.mockResolvedValue({});
+
+    const site = await db.insert(schema.sites).values({
+      name: 'new-api-site-stale-channel',
+      url: 'https://new-api-site-stale-channel.example.com',
+      platform: 'new-api',
+    }).returning().get();
+
+    const account = await db.insert(schema.accounts).values({
+      siteId: site.id,
+      username: 'new-api-user',
+      accessToken: 'session-token',
+      status: 'active',
+    }).returning().get();
+
+    const token = await db.insert(schema.accountTokens).values({
+      accountId: account.id,
+      name: 'codex',
+      token: 'sk-codex',
+      tokenGroup: 'codex',
+      source: 'sync',
+      enabled: true,
+      isDefault: true,
+    }).returning().get();
+
+    await db.insert(schema.tokenModelAvailability).values({
+      tokenId: token.id,
+      modelName: 'gpt-5.4-codex',
+      available: true,
+    }).run();
+
+    const route = await db.insert(schema.tokenRoutes).values({
+      modelPattern: 'gpt-5.4-codex',
+      enabled: true,
+    }).returning().get();
+
+    const channel = await db.insert(schema.routeChannels).values({
+      routeId: route.id,
+      accountId: account.id,
+      tokenId: token.id,
+      priority: 0,
+      weight: 10,
+      multiplier: 0.2,
+      enabled: true,
+      manualOverride: false,
+    }).returning().get();
+
+    const rebuild = await rebuildTokenRoutesFromAvailability();
+
+    expect(fetchGroupRatioForSiteMock).not.toHaveBeenCalled();
+    expect(rebuild.updatedChannels).toBe(0);
+    const refreshed = await db.select().from(schema.routeChannels)
+      .where(eq(schema.routeChannels.id, channel.id))
+      .get();
+    expect(refreshed?.multiplier).toBe(0.2);
   });
 });

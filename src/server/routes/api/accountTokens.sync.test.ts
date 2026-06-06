@@ -11,6 +11,7 @@ const getApiTokenMock = vi.fn();
 const createApiTokenMock = vi.fn();
 const getUserGroupsMock = vi.fn();
 const deleteApiTokenMock = vi.fn();
+const fetchGroupRatioForSiteMock = vi.fn();
 
 type AccountTokenServiceModule = typeof import('../../services/accountTokenService.js');
 
@@ -22,6 +23,10 @@ vi.mock('../../services/platforms/index.js', () => ({
     getUserGroups: (...args: unknown[]) => getUserGroupsMock(...args),
     deleteApiToken: (...args: unknown[]) => deleteApiTokenMock(...args),
   }),
+}));
+
+vi.mock('../../services/modelPricingService.js', () => ({
+  fetchGroupRatioForSite: (...args: unknown[]) => fetchGroupRatioForSiteMock(...args),
 }));
 
 type DbModule = typeof import('../../db/index.js');
@@ -86,8 +91,10 @@ describe('account tokens sync routes with site status', () => {
     createApiTokenMock.mockReset();
     getUserGroupsMock.mockReset();
     deleteApiTokenMock.mockReset();
+    fetchGroupRatioForSiteMock.mockReset();
     seedId = 0;
 
+    await db.delete(schema.accountGroupRatios).run();
     await db.delete(schema.accountTokens).run();
     await db.delete(schema.routeChannels).run();
     await db.delete(schema.tokenRoutes).run();
@@ -523,6 +530,48 @@ describe('account tokens sync routes with site status', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual([]);
+  });
+
+  it('reads token group multiplier from persisted last-known-good ratios', async () => {
+    const { account, site } = await seedAccount({ siteStatus: 'active' });
+    fetchGroupRatioForSiteMock.mockResolvedValue({ vip: 0.99 });
+
+    await db.insert(schema.accountTokens).values({
+      accountId: account.id,
+      name: 'vip-key',
+      token: 'sk-vip-key',
+      tokenGroup: 'vip',
+      enabled: true,
+      isDefault: true,
+    }).run();
+    await db.insert(schema.accountGroupRatios).values({
+      accountId: account.id,
+      siteId: site.id,
+      groupName: 'vip',
+      multiplier: 0.25,
+      refreshedAt: '2026-06-07T01:00:00.000Z',
+      failedAttempts: 2,
+      lastError: 'temporary upstream failure',
+      createdAt: '2026-06-07T01:00:00.000Z',
+      updatedAt: '2026-06-07T02:00:00.000Z',
+    }).run();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/account-tokens?accountId=${account.id}`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body).toHaveLength(1);
+    expect(body[0]).toMatchObject({
+      tokenGroup: 'vip',
+      groupMultiplier: 0.25,
+      groupMultiplierRefreshedAt: '2026-06-07T01:00:00.000Z',
+      groupMultiplierLastError: 'temporary upstream failure',
+      groupMultiplierStale: true,
+    });
+    expect(fetchGroupRatioForSiteMock).not.toHaveBeenCalled();
   });
 
   it('sync-all skips disabled-site accounts and syncs active-site accounts', async () => {

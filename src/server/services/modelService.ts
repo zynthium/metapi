@@ -35,13 +35,11 @@ import {
   validateGeminiCliOauthConnection,
 } from './platformDiscoveryRegistry.js';
 import { probeRuntimeModel, type RuntimeModelProbeStatus } from './runtimeModelProbe.js';
-import { fetchGroupRatioForSite } from './modelPricingService.js';
+import { getAccountGroupRatioMap } from './accountGroupRatioStore.js';
 
 const API_TOKEN_DISCOVERY_TIMEOUT_MS = 8_000;
 const MODEL_DISCOVERY_TIMEOUT_MS = 12_000;
 const MODEL_REFRESH_BATCH_SIZE = 3;
-type SiteRow = typeof schema.sites.$inferSelect;
-type AccountRow = typeof schema.accounts.$inferSelect;
 const GEMINI_CLI_STATIC_MODELS = [
   'gemini-2.5-pro',
   'gemini-2.5-flash',
@@ -1452,17 +1450,6 @@ export async function rebuildTokenRoutesFromAvailability() {
     addModelCandidate(row.model_availability.modelName, row.accounts.id, null, row.accounts.siteId);
   }
 
-  const accountById = new Map<number, AccountRow>();
-  const siteById = new Map<number, SiteRow>();
-  for (const row of usableTokenRows) {
-    accountById.set(row.accounts.id, row.accounts);
-    siteById.set(row.sites.id, row.sites);
-  }
-  for (const row of accountRows) {
-    accountById.set(row.accounts.id, row.accounts);
-    siteById.set(row.sites.id, row.sites);
-  }
-
   const tokenGroupCandidates = new Map<string, {
     accountId: number;
     siteId: number;
@@ -1478,24 +1465,12 @@ export async function rebuildTokenRoutesFromAvailability() {
     }
   }
 
-  const groupRatioBySiteAccount = new Map<string, Record<string, number>>();
+  const groupRatioBySiteAccount = new Map<string, Awaited<ReturnType<typeof getAccountGroupRatioMap>>>();
   if (tokenGroupCandidates.size > 0) {
     await Promise.all(
       Array.from(tokenGroupCandidates.entries()).map(async ([key, candidate]) => {
-        const site = siteById.get(candidate.siteId);
-        if (!site || site.status !== 'active') return;
-        const account = accountById.get(candidate.accountId);
-        if (!account) return;
-
-        const token = account.accessToken || account.apiToken || null;
-        if (!token) return;
-        const platformUserId = resolvePlatformUserId(account.extraConfig, account.username);
-        try {
-          const groupRatio = await fetchGroupRatioForSite(site, token, platformUserId);
-          if (groupRatio) {
-            groupRatioBySiteAccount.set(key, groupRatio);
-          }
-        } catch {}
+        const groupRatio = await getAccountGroupRatioMap(candidate.accountId, candidate.siteId);
+        groupRatioBySiteAccount.set(key, groupRatio);
       }),
     );
   }
@@ -1513,14 +1488,14 @@ export async function rebuildTokenRoutesFromAvailability() {
     accountId: number;
     tokenGroup: string | null;
     siteId: number;
-  }) => {
+  }): number | null => {
     if (candidate.tokenGroup && candidate.siteId) {
       const groupRatio = groupRatioBySiteAccount.get(`${candidate.siteId}:${candidate.accountId}`);
       if (groupRatio && candidate.tokenGroup in groupRatio) {
-        return groupRatio[candidate.tokenGroup];
+        return groupRatio[candidate.tokenGroup]?.multiplier ?? null;
       }
     }
-    return 1.0;
+    return null;
   };
 
   for (const [modelName, candidateMap] of modelCandidates.entries()) {
@@ -1546,7 +1521,7 @@ export async function rebuildTokenRoutesFromAvailability() {
       const channelMultiplier = resolveChannelMultiplier(candidate);
       const existing = routeChannels.find((channel) => buildChannelKey(channel) === candidateKey);
       if (existing) {
-        if (!existing.manualOverride && existing.multiplier !== channelMultiplier) {
+        if (!existing.manualOverride && channelMultiplier != null && existing.multiplier !== channelMultiplier) {
           await db.update(schema.routeChannels)
             .set({ multiplier: channelMultiplier })
             .where(eq(schema.routeChannels.id, existing.id))
@@ -1564,7 +1539,7 @@ export async function rebuildTokenRoutesFromAvailability() {
         oauthRouteUnitId: candidate.oauthRouteUnitId,
         priority: 0,
         weight: 10,
-        multiplier: channelMultiplier,
+        multiplier: channelMultiplier ?? 1.0,
         enabled: true,
         manualOverride: false,
       }).run();
