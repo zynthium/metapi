@@ -365,6 +365,162 @@ describe('TokenRouter runtime cache', () => {
     expect(cooldownMs).toBeLessThanOrEqual(6 * 60 * 1000);
   });
 
+  it('keeps API-key quota exhaustion out of sibling route probabilities', async () => {
+    const exhaustedSite = await db.insert(schema.sites).values({
+      name: 'quota-exhausted-site',
+      url: 'https://quota-exhausted.example.com',
+      platform: 'one-hub',
+      status: 'active',
+    }).returning().get();
+
+    const exhaustedAccount = await db.insert(schema.accounts).values({
+      siteId: exhaustedSite.id,
+      username: 'quota-exhausted-user',
+      accessToken: '',
+      apiToken: 'sk-quota-exhausted',
+      status: 'active',
+      extraConfig: JSON.stringify({ credentialMode: 'apikey' }),
+    }).returning().get();
+
+    const failedRoute = await db.insert(schema.tokenRoutes).values({
+      modelPattern: 'gpt-5.5',
+      routingStrategy: 'weighted',
+      enabled: true,
+    }).returning().get();
+    const siblingRoute = await db.insert(schema.tokenRoutes).values({
+      modelPattern: 'gpt-5.4',
+      routingStrategy: 'weighted',
+      enabled: true,
+    }).returning().get();
+
+    const failedChannel = await db.insert(schema.routeChannels).values({
+      routeId: failedRoute.id,
+      accountId: exhaustedAccount.id,
+      tokenId: null,
+      priority: 0,
+      weight: 10,
+      enabled: true,
+    }).returning().get();
+    const exhaustedSiblingChannel = await db.insert(schema.routeChannels).values({
+      routeId: siblingRoute.id,
+      accountId: exhaustedAccount.id,
+      tokenId: null,
+      priority: 0,
+      weight: 10,
+      enabled: true,
+    }).returning().get();
+
+    const healthySite = await db.insert(schema.sites).values({
+      name: 'quota-healthy-site',
+      url: 'https://quota-healthy.example.com',
+      platform: 'one-hub',
+      status: 'active',
+    }).returning().get();
+    const healthyAccount = await db.insert(schema.accounts).values({
+      siteId: healthySite.id,
+      username: 'quota-healthy-user',
+      accessToken: '',
+      apiToken: 'sk-quota-healthy',
+      status: 'active',
+      extraConfig: JSON.stringify({ credentialMode: 'apikey' }),
+    }).returning().get();
+    const healthyChannel = await db.insert(schema.routeChannels).values({
+      routeId: siblingRoute.id,
+      accountId: healthyAccount.id,
+      tokenId: null,
+      priority: 0,
+      weight: 10,
+      enabled: true,
+    }).returning().get();
+
+    const router = new TokenRouter();
+    await router.recordFailure(failedChannel.id, {
+      status: 403,
+      errorText: '余额和订阅额度均不足，请充值后再使用',
+      modelName: 'gpt-5.5',
+    });
+
+    const failedAfter = await db.select().from(schema.routeChannels)
+      .where(eq(schema.routeChannels.id, failedChannel.id))
+      .get();
+    const siblingAfter = await db.select().from(schema.routeChannels)
+      .where(eq(schema.routeChannels.id, exhaustedSiblingChannel.id))
+      .get();
+    expect(failedAfter?.cooldownUntil).toBeTruthy();
+    expect(siblingAfter?.cooldownUntil).toBeTruthy();
+
+    const decision = await router.explainSelection('gpt-5.4');
+    const exhaustedCandidate = decision.candidates.find((candidate) => candidate.channelId === exhaustedSiblingChannel.id);
+    const healthyCandidate = decision.candidates.find((candidate) => candidate.channelId === healthyChannel.id);
+
+    expect(exhaustedCandidate?.eligible).toBe(false);
+    expect(exhaustedCandidate?.probability).toBe(0);
+    expect(exhaustedCandidate?.reason || '').toContain('额度');
+    expect(healthyCandidate?.eligible).toBe(true);
+    expect(healthyCandidate?.probability).toBe(100);
+  });
+
+  it('keeps ordinary 403 failures scoped to the failed channel', async () => {
+    const site = await db.insert(schema.sites).values({
+      name: 'ordinary-forbidden-site',
+      url: 'https://ordinary-forbidden.example.com',
+      platform: 'one-hub',
+      status: 'active',
+    }).returning().get();
+
+    const account = await db.insert(schema.accounts).values({
+      siteId: site.id,
+      username: 'ordinary-forbidden-user',
+      accessToken: '',
+      apiToken: 'sk-ordinary-forbidden',
+      status: 'active',
+      extraConfig: JSON.stringify({ credentialMode: 'apikey' }),
+    }).returning().get();
+
+    const failedRoute = await db.insert(schema.tokenRoutes).values({
+      modelPattern: 'gpt-5.5',
+      routingStrategy: 'weighted',
+      enabled: true,
+    }).returning().get();
+    const siblingRoute = await db.insert(schema.tokenRoutes).values({
+      modelPattern: 'gpt-5.4',
+      routingStrategy: 'weighted',
+      enabled: true,
+    }).returning().get();
+
+    const failedChannel = await db.insert(schema.routeChannels).values({
+      routeId: failedRoute.id,
+      accountId: account.id,
+      tokenId: null,
+      enabled: true,
+    }).returning().get();
+    const siblingChannel = await db.insert(schema.routeChannels).values({
+      routeId: siblingRoute.id,
+      accountId: account.id,
+      tokenId: null,
+      enabled: true,
+    }).returning().get();
+
+    const router = new TokenRouter();
+    await router.recordFailure(failedChannel.id, {
+      status: 403,
+      errorText: 'Forbidden: model access denied',
+      modelName: 'gpt-5.5',
+    });
+
+    const failedAfter = await db.select().from(schema.routeChannels)
+      .where(eq(schema.routeChannels.id, failedChannel.id))
+      .get();
+    const siblingAfter = await db.select().from(schema.routeChannels)
+      .where(eq(schema.routeChannels.id, siblingChannel.id))
+      .get();
+
+    expect(failedAfter?.cooldownUntil).toBeTruthy();
+    expect(failedAfter?.failCount).toBe(1);
+    expect(siblingAfter?.cooldownUntil).toBeNull();
+    expect(siblingAfter?.failCount).toBe(0);
+  });
+
   it('reuses stored codex oauth reset hints when the latest 429 omits reset timing', async () => {
     const site = await db.insert(schema.sites).values({
       name: 'codex-oauth-stored-reset-site',

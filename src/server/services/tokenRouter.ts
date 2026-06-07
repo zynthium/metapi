@@ -93,6 +93,7 @@ type SiteRuntimeHealthState = {
 
 const FAILURE_BACKOFF_BASE_SEC = 15;
 const SHORT_WINDOW_LIMIT_COOLDOWN_MS = 5 * 60 * 1000;
+const HARD_CREDENTIAL_QUOTA_FALLBACK_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 // Keep weighted-route backoff within the JavaScript Date range when fail counts grow large.
 const MAX_FAILURE_BACKOFF_SEC = 30 * 24 * 60 * 60;
 const MIN_EFFECTIVE_UNIT_COST = 1e-6;
@@ -184,6 +185,21 @@ const USAGE_LIMIT_RATE_LIMIT_PATTERNS: RegExp[] = [
   /quota\s+exceeded/i,
   /rate\s+limit/i,
   /\blimit\b/i,
+];
+
+const HARD_CREDENTIAL_QUOTA_FAILURE_PATTERNS: RegExp[] = [
+  /insufficient[_\s-]+quota/i,
+  /insufficient[_\s-]+credits?/i,
+  /insufficient[_\s-]+balance/i,
+  /credits?\s+(?:exhausted|depleted|used\s+up)/i,
+  /quota\s+(?:exhausted|depleted|used\s+up)/i,
+  /out\s+of\s+(?:credits?|quota)/i,
+  /billing\s+(?:quota|credits?|balance)/i,
+  /余额.*不足/,
+  /额度.*不足/,
+  /订阅.*不足/,
+  /请充值/,
+  /已用尽/,
 ];
 
 type SiteRuntimeHealthPersistencePayload = {
@@ -361,8 +377,15 @@ function matchesAnyPattern(patterns: RegExp[], input?: string | null): boolean {
 
 function isUsageLimitRateLimitFailure(context: SiteRuntimeFailureContext = {}): boolean {
   const status = typeof context.status === 'number' ? context.status : 0;
+  if (isHardCredentialQuotaFailure(context)) return true;
   if (status !== 429) return false;
   return matchesAnyPattern(USAGE_LIMIT_RATE_LIMIT_PATTERNS, context.errorText);
+}
+
+function isHardCredentialQuotaFailure(context: SiteRuntimeFailureContext = {}): boolean {
+  const status = typeof context.status === 'number' ? context.status : 0;
+  if (![402, 403, 429].includes(status)) return false;
+  return matchesAnyPattern(HARD_CREDENTIAL_QUOTA_FAILURE_PATTERNS, context.errorText);
 }
 
 function isModelScopedRuntimeFailure(context: SiteRuntimeFailureContext = {}): boolean {
@@ -535,7 +558,7 @@ function isTransientSiteRuntimeFailure(context: SiteRuntimeFailureContext = {}):
   return status >= 500 || status === 429 || matchesAnyPattern(SITE_TRANSIENT_FAILURE_PATTERNS, errorText);
 }
 
-function resolveShortWindowLimitCooldown(
+function resolveCredentialScopedLimitCooldown(
   account: typeof schema.accounts.$inferSelect,
   context: SiteRuntimeFailureContext = {},
   nowMs = Date.now(),
@@ -561,7 +584,23 @@ function resolveShortWindowLimitCooldown(
     }
   }
 
+  if (isHardCredentialQuotaFailure({ status, errorText })) {
+    return new Date(nowMs + clampFailureCooldownMs(HARD_CREDENTIAL_QUOTA_FALLBACK_COOLDOWN_MS)).toISOString();
+  }
+
   return new Date(nowMs + SHORT_WINDOW_LIMIT_COOLDOWN_MS).toISOString();
+}
+
+function isProviderDirectedCredentialCooldown(channel: {
+  cooldownUntil?: string | null;
+  failCount?: number | null;
+  consecutiveFailCount?: number | null;
+  cooldownLevel?: number | null;
+}): boolean {
+  return !!channel.cooldownUntil
+    && (channel.failCount ?? 0) <= 0
+    && (channel.consecutiveFailCount ?? 0) <= 0
+    && (channel.cooldownLevel ?? 0) <= 0;
 }
 
 async function loadCredentialScopedChannelIds(
@@ -2866,8 +2905,8 @@ export class TokenRouter {
         ))
         .get();
       if (memberRow) {
-        const shortWindowLimitCooldownUntil = resolveShortWindowLimitCooldown(memberRow.account, normalizedContext, nowMs);
-        const failCount = shortWindowLimitCooldownUntil ? 0 : ((memberRow.member.failCount ?? 0) + 1);
+        const credentialScopedLimitCooldownUntil = resolveCredentialScopedLimitCooldown(memberRow.account, normalizedContext, nowMs);
+        const failCount = credentialScopedLimitCooldownUntil ? 0 : ((memberRow.member.failCount ?? 0) + 1);
         const routeUnitStrategy = memberRow.unit.strategy === 'stick_until_unavailable'
           ? 'stick_until_unavailable'
           : 'round_robin';
@@ -2875,8 +2914,8 @@ export class TokenRouter {
         let consecutiveFailCount = Math.max(0, memberRow.member.consecutiveFailCount ?? 0) + 1;
         let cooldownLevel = Math.max(0, memberRow.member.cooldownLevel ?? 0);
 
-        if (shortWindowLimitCooldownUntil) {
-          cooldownUntil = shortWindowLimitCooldownUntil;
+        if (credentialScopedLimitCooldownUntil) {
+          cooldownUntil = credentialScopedLimitCooldownUntil;
           consecutiveFailCount = 0;
           cooldownLevel = 0;
         } else if (routeUnitStrategy === 'round_robin') {
@@ -2908,18 +2947,18 @@ export class TokenRouter {
       }
     }
 
-    const shortWindowLimitCooldownUntil = resolveShortWindowLimitCooldown(account, normalizedContext, nowMs);
-    const failCount = shortWindowLimitCooldownUntil ? 0 : ((ch.failCount ?? 0) + 1);
+    const credentialScopedLimitCooldownUntil = resolveCredentialScopedLimitCooldown(account, normalizedContext, nowMs);
+    const failCount = credentialScopedLimitCooldownUntil ? 0 : ((ch.failCount ?? 0) + 1);
     const routeStrategy = resolveRouteStrategy(route);
-    const affectedChannelIds = shortWindowLimitCooldownUntil
+    const affectedChannelIds = credentialScopedLimitCooldownUntil
       ? await loadCredentialScopedChannelIds(ch, account.id)
       : [channelId];
     let cooldownUntil: string | null = null;
     let consecutiveFailCount = Math.max(0, ch.consecutiveFailCount ?? 0) + 1;
     let cooldownLevel = Math.max(0, ch.cooldownLevel ?? 0);
 
-    if (shortWindowLimitCooldownUntil) {
-      cooldownUntil = shortWindowLimitCooldownUntil;
+    if (credentialScopedLimitCooldownUntil) {
+      cooldownUntil = credentialScopedLimitCooldownUntil;
       consecutiveFailCount = 0;
       cooldownLevel = 0;
     } else if (routeStrategy === 'round_robin') {
@@ -3550,7 +3589,7 @@ export class TokenRouter {
     if (!tokenValue) reasonParts.push('令牌不可用');
 
     if (candidate.channel.cooldownUntil && candidate.channel.cooldownUntil > nowIso) {
-      reasonParts.push('冷却中');
+      reasonParts.push(isProviderDirectedCredentialCooldown(candidate.channel) ? '凭证额度冷却中' : '冷却中');
     }
 
     return reasonParts;
