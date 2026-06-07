@@ -241,4 +241,87 @@ describe('chat proxy site api endpoint rotation', () => {
     expect(storedEndpoints[0]?.cooldownUntil).toBeTruthy();
     expect(storedEndpoints[1]?.lastSelectedAt).toBeTruthy();
   });
+
+  it('retries transient 403 responses on the same channel before recording channel failure', async () => {
+    const site = await db.insert(schema.sites).values({
+      name: 'transient-403-panel',
+      url: 'https://api.example.com',
+      platform: 'openai',
+      status: 'active',
+    }).returning().get();
+
+    const account = await db.insert(schema.accounts).values({
+      siteId: site.id,
+      username: 'transient-user',
+      accessToken: '',
+      apiToken: 'sk-transient',
+      status: 'active',
+      checkinEnabled: false,
+      extraConfig: JSON.stringify({ credentialMode: 'apikey' }),
+    }).returning().get();
+
+    selectChannelMock.mockReturnValue({
+      channel: { id: 11, routeId: 22 },
+      site,
+      account,
+      tokenName: 'default',
+      tokenValue: 'sk-transient',
+      actualModel: 'gpt-4o-mini',
+    });
+    selectNextChannelMock.mockReturnValue({
+      channel: { id: 12, routeId: 22 },
+      site,
+      account,
+      tokenName: 'fallback',
+      tokenValue: 'sk-fallback',
+      actualModel: 'gpt-4o-mini',
+    });
+
+    fetchMock
+      .mockResolvedValueOnce(new Response('transient forbidden 1', { status: 403 }))
+      .mockResolvedValueOnce(new Response('transient forbidden 2', { status: 403 }))
+      .mockResolvedValueOnce(new Response('transient forbidden 3', { status: 403 }))
+      .mockResolvedValueOnce(new Response('transient forbidden 4', { status: 403 }))
+      .mockResolvedValueOnce(new Response('transient forbidden 5', { status: 403 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        id: 'chatcmpl-after-403',
+        object: 'chat.completion',
+        created: 1_706_000_001,
+        model: 'gpt-4o-mini',
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: 'ok after transient 403' },
+          finish_reason: 'stop',
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }));
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()?.choices?.[0]?.message?.content).toBe('ok after transient 403');
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(selectChannelMock).toHaveBeenCalledTimes(1);
+    expect(selectNextChannelMock).not.toHaveBeenCalled();
+    expect(recordFailureMock).not.toHaveBeenCalled();
+    expect(recordSuccessMock).toHaveBeenCalledTimes(1);
+
+    const urls = fetchMock.mock.calls.map((call) => String(call[0] || ''));
+    expect(new Set(urls)).toEqual(new Set(['https://api.example.com/v1/responses']));
+    const authorizations = fetchMock.mock.calls.map((call) => {
+      const [, init] = call as [string, RequestInit];
+      return (init.headers as Record<string, string>)?.Authorization;
+    });
+    expect(new Set(authorizations)).toEqual(new Set(['Bearer sk-transient']));
+  });
 });

@@ -25,6 +25,7 @@ import {
   selectProxyChannelForAttempt,
 } from '../../proxy-core/channelSelection.js';
 import { runWithSiteApiEndpointPool, SiteApiEndpointRequestError } from '../../services/siteApiEndpointService.js';
+import { retryForbiddenResponseOnSameChannel } from '../../proxy-core/orchestration/forbiddenSameChannelRetry.js';
 
 function rewriteVideoResponsePublicId(payload: unknown, publicId: string): unknown {
   if (!payload || typeof payload !== 'object') return payload;
@@ -89,28 +90,30 @@ export async function videosProxyRoute(app: FastifyInstance) {
         const { upstream, text, baseUrl } = await runWithSiteApiEndpointPool(selected.site, async (target) => {
           const targetUrl = buildUpstreamUrl(target.baseUrl, '/v1/videos');
           const accountProxy = getProxyUrlFromExtraConfig(selected.account.extraConfig);
-          const requestInit = multipartForm
-            ? withSiteRecordProxyRequestInit(selected.site, {
-              method: 'POST',
-              headers: {
-                Authorization: `Bearer ${selected.tokenValue}`,
-              },
-              body: cloneFormDataWithOverrides(multipartForm, {
-                model: upstreamModel,
-              }) as any,
-            }, accountProxy)
-            : withSiteRecordProxyRequestInit(selected.site, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${selected.tokenValue}`,
-              },
-              body: JSON.stringify({
-                ...(jsonBody || {}),
-                model: upstreamModel,
-              }),
-            }, accountProxy);
-          const response = await fetch(targetUrl, requestInit);
+          const response = await retryForbiddenResponseOnSameChannel(() => {
+            const requestInit = multipartForm
+              ? withSiteRecordProxyRequestInit(selected.site, {
+                method: 'POST',
+                headers: {
+                  Authorization: `Bearer ${selected.tokenValue}`,
+                },
+                body: cloneFormDataWithOverrides(multipartForm, {
+                  model: upstreamModel,
+                }) as any,
+              }, accountProxy)
+              : withSiteRecordProxyRequestInit(selected.site, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${selected.tokenValue}`,
+                },
+                body: JSON.stringify({
+                  ...(jsonBody || {}),
+                  model: upstreamModel,
+                }),
+              }, accountProxy);
+            return fetch(targetUrl, requestInit);
+          });
           const responseText = await response.text();
           if (!response.ok) {
             throw new SiteApiEndpointRequestError(responseText || 'unknown error', {
@@ -266,12 +269,15 @@ async function requestMappedVideoTaskUpstream(
 ): Promise<{ upstream: Awaited<ReturnType<typeof fetch>> }> {
   const buildRequest = async (baseUrl: string) => {
     const targetUrl = buildUpstreamUrl(baseUrl, `/v1/videos/${encodeURIComponent(mapping.upstreamVideoId)}`);
-    const upstream = await fetch(targetUrl, await withSiteProxyRequestInit(targetUrl, {
-      method,
-      headers: {
-        Authorization: `Bearer ${mapping.tokenValue}`,
-      },
-    }));
+    const upstream = await retryForbiddenResponseOnSameChannel(async () => fetch(
+      targetUrl,
+      await withSiteProxyRequestInit(targetUrl, {
+        method,
+        headers: {
+          Authorization: `Bearer ${mapping.tokenValue}`,
+        },
+      }),
+    ));
     if (!upstream.ok) {
       const errorText = await upstream.clone().text().catch(() => '');
       if (shouldRetryProxyRequest(upstream.status, errorText || `HTTP ${upstream.status}`)) {

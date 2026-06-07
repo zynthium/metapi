@@ -21,6 +21,7 @@ import { insertProxyLog } from '../../services/proxyLogStore.js';
 import { fetchWithObservedFirstByte, getObservedResponseMeta } from '../../proxy-core/firstByteTimeout.js';
 import { getProxyMaxChannelRetries } from '../../services/proxyChannelRetry.js';
 import { runWithSiteApiEndpointPool, SiteApiEndpointRequestError } from '../../services/siteApiEndpointService.js';
+import { retryForbiddenResponseOnSameChannel } from '../../proxy-core/orchestration/forbiddenSameChannelRetry.js';
 import {
   buildForcedChannelUnavailableMessage,
   canRetryChannelSelection,
@@ -81,22 +82,23 @@ export async function completionsProxyRoute(app: FastifyInstance) {
       const startTime = Date.now();
       try {
         const { upstream, firstByteLatencyMs } = await runWithSiteApiEndpointPool(selected.site, async (target) => {
-          const attemptStartedAtMs = Date.now();
           const targetUrl = buildUpstreamUrl(target.baseUrl, '/v1/completions');
-          const response = await fetchWithObservedFirstByte(
-            async (signal) => fetch(targetUrl, withSiteRecordProxyRequestInit(selected.site, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${selected.tokenValue}`,
+          const response = await retryForbiddenResponseOnSameChannel(
+            () => fetchWithObservedFirstByte(
+              async (signal) => fetch(targetUrl, withSiteRecordProxyRequestInit(selected.site, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${selected.tokenValue}`,
+                },
+                body: JSON.stringify(forwardBody),
+                signal,
+              }, getProxyUrlFromExtraConfig(selected.account.extraConfig))),
+              {
+                firstByteTimeoutMs,
+                startedAtMs: Date.now(),
               },
-              body: JSON.stringify(forwardBody),
-              signal,
-            }, getProxyUrlFromExtraConfig(selected.account.extraConfig))),
-            {
-              firstByteTimeoutMs,
-              startedAtMs: attemptStartedAtMs,
-            },
+            ),
           );
           const observedFirstByteLatencyMs = getObservedResponseMeta(response)?.firstByteLatencyMs ?? null;
           if (!response.ok) {

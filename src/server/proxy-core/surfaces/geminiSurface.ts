@@ -15,6 +15,7 @@ import { resolveChannelProxyUrl, withSiteRecordProxyRequestInit } from '../../se
 import * as routeRefreshWorkflow from '../../services/routeRefreshWorkflow.js';
 import { getDownstreamRoutingPolicy } from '../../routes/proxy/downstreamPolicy.js';
 import { executeEndpointFlow, type BuiltEndpointRequest } from '../orchestration/endpointFlow.js';
+import { retryForbiddenResponseOnSameChannel } from '../orchestration/forbiddenSameChannelRetry.js';
 import { composeProxyLogMessage } from '../../services/proxyLogMessage.js';
 import {
   buildUpstreamEndpointRequest,
@@ -416,9 +417,11 @@ export async function geminiProxyRoute(app: FastifyInstance) {
 
         const targetUrl = geminiGenerateContentTransformer.resolveModelsUrl(selected.site.url, apiVersion, selected.tokenValue);
         const upstreamPath = `/${apiVersion}/models`;
-        const upstream = await fetch(
-          targetUrl,
-          { method: 'GET' },
+        const upstream = await retryForbiddenResponseOnSameChannel(
+          () => fetch(
+            targetUrl,
+            { method: 'GET' },
+          ),
         );
         const text = await readRuntimeResponseText(upstream);
         await safeInsertSurfaceProxyDebugAttempt(debugTrace, {
@@ -751,12 +754,14 @@ export async function geminiProxyRoute(app: FastifyInstance) {
           };
 
           let directDispatchState = buildDirectDispatchState();
-          const dispatchWithObservedFirstByte = async () => fetchWithObservedFirstByte(
-            (signal) => directDispatchState.dispatch(signal),
-            {
-              firstByteTimeoutMs,
-              startedAtMs: Date.now(),
-            },
+          const dispatchWithObservedFirstByte = async () => retryForbiddenResponseOnSameChannel(
+            () => fetchWithObservedFirstByte(
+              (signal) => directDispatchState.dispatch(signal),
+              {
+                firstByteTimeoutMs,
+                startedAtMs: Date.now(),
+              },
+            ),
           );
           let upstream = await dispatchWithObservedFirstByte();
           let firstByteLatencyMs = getObservedResponseMeta(upstream)?.firstByteLatencyMs ?? null;

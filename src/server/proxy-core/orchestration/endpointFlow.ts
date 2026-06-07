@@ -7,6 +7,7 @@ import {
   summarizeUpstreamError,
   type UpstreamEndpoint,
 } from './upstreamRequest.js';
+import { shouldRetryForbiddenOnSameChannel } from './forbiddenSameChannelRetry.js';
 
 export type BuiltEndpointRequest = {
   endpoint: UpstreamEndpoint;
@@ -112,6 +113,7 @@ export async function executeEndpointFlow(input: ExecuteEndpointFlowInput): Prom
   let finalErrText = 'unknown error';
   let finalRawErrText: string | undefined;
 
+  endpointLoop:
   for (let endpointIndex = 0; endpointIndex < endpointCount; endpointIndex += 1) {
     const endpoint = input.endpointCandidates[endpointIndex] as UpstreamEndpoint;
     const request = input.buildRequest(endpoint, endpointIndex);
@@ -119,138 +121,148 @@ export async function executeEndpointFlow(input: ExecuteEndpointFlowInput): Prom
     const targetUrl = input.proxyUrl
       ? buildUpstreamUrl(input.proxyUrl, request.path)
       : defaultTarget;
+    const isLastEndpoint = endpointIndex >= endpointCount - 1;
+    let forbiddenSameEndpointRetryCount = 0;
 
-    const attemptStartedAtMs = Date.now();
-    let response = await fetchWithObservedFirstByte(
-      async (signal) => (
-        input.dispatchRequest
-          ? await input.dispatchRequest(request, targetUrl, signal)
-          : await fetch(targetUrl, await withSiteProxyRequestInit(targetUrl, {
-            method: 'POST',
-            headers: request.headers,
-            body: JSON.stringify(request.body),
-            signal,
-          }))
-      ),
-      {
-        firstByteTimeoutMs: input.firstByteTimeoutMs,
-        startedAtMs: attemptStartedAtMs,
-      },
-    );
+    while (true) {
+      const attemptStartedAtMs = Date.now();
+      let response = await fetchWithObservedFirstByte(
+        async (signal) => (
+          input.dispatchRequest
+            ? await input.dispatchRequest(request, targetUrl, signal)
+            : await fetch(targetUrl, await withSiteProxyRequestInit(targetUrl, {
+              method: 'POST',
+              headers: request.headers,
+              body: JSON.stringify(request.body),
+              signal,
+            }))
+        ),
+        {
+          firstByteTimeoutMs: input.firstByteTimeoutMs,
+          startedAtMs: attemptStartedAtMs,
+        },
+      );
 
-    if (response.ok) {
-      await runEndpointFlowHook(input.onAttemptSuccess, {
+      if (response.ok) {
+        await runEndpointFlowHook(input.onAttemptSuccess, {
+          endpointIndex,
+          endpointCount,
+          request,
+          targetUrl,
+          response,
+          recoverApplied: false,
+        }, 'onAttemptSuccess');
+        return {
+          ok: true,
+          upstream: response,
+          upstreamPath: request.path,
+        };
+      }
+
+      let rawErrText = await readRuntimeResponseText(response).catch(() => 'unknown error');
+      const baseContext: EndpointAttemptContext = {
         endpointIndex,
         endpointCount,
         request,
         targetUrl,
         response,
+        rawErrText,
         recoverApplied: false,
-      }, 'onAttemptSuccess');
-      return {
-        ok: true,
-        upstream: response,
-        upstreamPath: request.path,
       };
-    }
 
-    let rawErrText = await readRuntimeResponseText(response).catch(() => 'unknown error');
-    const baseContext: EndpointAttemptContext = {
-      endpointIndex,
-      endpointCount,
-      request,
-      targetUrl,
-      response,
-      rawErrText,
-      recoverApplied: false,
-    };
-    const isLastEndpoint = endpointIndex >= endpointCount - 1;
-
-    if (isObservedFirstByteTimeoutResponse(response) && !isLastEndpoint) {
-      const errText = rawErrText.trim() || 'first byte timeout';
-      const timeoutContext = {
-        ...baseContext,
-        errText,
-      };
-      await runEndpointFlowHook(input.onAttemptFailure, timeoutContext, 'onAttemptFailure');
-      finalStatus = response.status || 408;
-      finalErrText = errText;
-      finalRawErrText = rawErrText;
-      if (input.disableCrossProtocolFallback) {
-        break;
-      }
-      continue;
-    }
-
-    if (input.tryRecover) {
-      const recovered = await input.tryRecover(baseContext);
-      baseContext.recoverApplied = recovered !== null
-        || baseContext.request !== request
-        || baseContext.response !== response
-        || baseContext.rawErrText !== rawErrText;
-      if (recovered?.upstream?.ok) {
-        const recoveredRequest = recovered.request ?? baseContext.request;
-        const recoveredTargetUrl = recovered.targetUrl ?? (
-          input.proxyUrl
-            ? buildUpstreamUrl(input.proxyUrl, recovered.upstreamPath)
-            : buildUpstreamUrl(input.siteUrl, recovered.upstreamPath)
-        );
-        await runEndpointFlowHook(input.onAttemptSuccess, {
-          endpointIndex,
-          endpointCount,
-          request: recoveredRequest,
-          targetUrl: recoveredTargetUrl,
-          response: recovered.upstream,
-          recoverApplied: true,
-        }, 'onAttemptSuccess');
-        return {
-          ok: true,
-          upstream: recovered.upstream,
-          upstreamPath: recovered.upstreamPath,
+      if (isObservedFirstByteTimeoutResponse(response) && !isLastEndpoint) {
+        const errText = rawErrText.trim() || 'first byte timeout';
+        const timeoutContext = {
+          ...baseContext,
+          errText,
         };
+        await runEndpointFlowHook(input.onAttemptFailure, timeoutContext, 'onAttemptFailure');
+        finalStatus = response.status || 408;
+        finalErrText = errText;
+        finalRawErrText = rawErrText;
+        if (input.disableCrossProtocolFallback) {
+          break endpointLoop;
+        }
+        continue endpointLoop;
       }
-    }
 
-    rawErrText = baseContext.rawErrText;
-    response = baseContext.response;
-    const errText = withUpstreamPath(
-      baseContext.request.path,
-      summarizeUpstreamError(response.status, rawErrText),
-    );
-    await runEndpointFlowHook(input.onAttemptFailure, {
-      ...baseContext,
-      errText,
-    }, 'onAttemptFailure');
+      if (input.tryRecover) {
+        const recovered = await input.tryRecover(baseContext);
+        baseContext.recoverApplied = recovered !== null
+          || baseContext.request !== request
+          || baseContext.response !== response
+          || baseContext.rawErrText !== rawErrText;
+        if (recovered?.upstream?.ok) {
+          const recoveredRequest = recovered.request ?? baseContext.request;
+          const recoveredTargetUrl = recovered.targetUrl ?? (
+            input.proxyUrl
+              ? buildUpstreamUrl(input.proxyUrl, recovered.upstreamPath)
+              : buildUpstreamUrl(input.siteUrl, recovered.upstreamPath)
+          );
+          await runEndpointFlowHook(input.onAttemptSuccess, {
+            endpointIndex,
+            endpointCount,
+            request: recoveredRequest,
+            targetUrl: recoveredTargetUrl,
+            response: recovered.upstream,
+            recoverApplied: true,
+          }, 'onAttemptSuccess');
+          return {
+            ok: true,
+            upstream: recovered.upstream,
+            upstreamPath: recovered.upstreamPath,
+          };
+        }
+      }
 
-    if (input.disableCrossProtocolFallback && !isLastEndpoint) {
-      finalStatus = response.status;
-      finalErrText = errText;
-      finalRawErrText = rawErrText;
-      break;
-    }
-    const shouldAbortRemainingEndpoints = !isLastEndpoint && !!input.shouldAbortRemainingEndpoints?.({
-      ...baseContext,
-      errText,
-    });
-    if (shouldAbortRemainingEndpoints) {
-      finalStatus = response.status;
-      finalErrText = errText;
-      finalRawErrText = rawErrText;
-      break;
-    }
-    const shouldDowngrade = !isLastEndpoint && !!input.shouldDowngrade?.(baseContext);
-    if (shouldDowngrade) {
-      await runEndpointFlowHook(input.onDowngrade, {
+      rawErrText = baseContext.rawErrText;
+      response = baseContext.response;
+      if (
+        response.status === 403
+        && shouldRetryForbiddenOnSameChannel(response.status, forbiddenSameEndpointRetryCount)
+      ) {
+        forbiddenSameEndpointRetryCount += 1;
+        continue;
+      }
+      const errText = withUpstreamPath(
+        baseContext.request.path,
+        summarizeUpstreamError(response.status, rawErrText),
+      );
+      await runEndpointFlowHook(input.onAttemptFailure, {
         ...baseContext,
         errText,
-      }, 'onDowngrade');
-      continue;
-    }
+      }, 'onAttemptFailure');
 
-    finalStatus = response.status;
-    finalErrText = errText;
-    finalRawErrText = rawErrText;
-    break;
+      if (input.disableCrossProtocolFallback && !isLastEndpoint) {
+        finalStatus = response.status;
+        finalErrText = errText;
+        finalRawErrText = rawErrText;
+        break endpointLoop;
+      }
+      const shouldAbortRemainingEndpoints = !isLastEndpoint && !!input.shouldAbortRemainingEndpoints?.({
+        ...baseContext,
+        errText,
+      });
+      if (shouldAbortRemainingEndpoints) {
+        finalStatus = response.status;
+        finalErrText = errText;
+        finalRawErrText = rawErrText;
+        break endpointLoop;
+      }
+      const shouldDowngrade = !isLastEndpoint && !!input.shouldDowngrade?.(baseContext);
+      if (shouldDowngrade) {
+        await runEndpointFlowHook(input.onDowngrade, {
+          ...baseContext,
+          errText,
+        }, 'onDowngrade');
+        continue endpointLoop;
+      }
+
+      finalStatus = response.status;
+      finalErrText = errText;
+      finalRawErrText = rawErrText;
+      break endpointLoop;
+    }
   }
 
   return {

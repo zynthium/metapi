@@ -19,6 +19,7 @@ import { insertProxyLog } from '../../services/proxyLogStore.js';
 import { fetchWithObservedFirstByte, getObservedResponseMeta } from '../../proxy-core/firstByteTimeout.js';
 import { getProxyMaxChannelRetries } from '../../services/proxyChannelRetry.js';
 import { runWithSiteApiEndpointPool, SiteApiEndpointRequestError } from '../../services/siteApiEndpointService.js';
+import { retryForbiddenResponseOnSameChannel } from '../../proxy-core/orchestration/forbiddenSameChannelRetry.js';
 import {
   buildForcedChannelUnavailableMessage,
   canRetryChannelSelection,
@@ -76,22 +77,23 @@ export async function imagesProxyRoute(app: FastifyInstance) {
 
       try {
         const { upstream, text, firstByteLatencyMs } = await runWithSiteApiEndpointPool(selected.site, async (target) => {
-          const attemptStartedAtMs = Date.now();
           const targetUrl = buildUpstreamUrl(target.baseUrl, '/v1/images/generations');
-          const response = await fetchWithObservedFirstByte(
-            async (signal) => fetch(targetUrl, withSiteRecordProxyRequestInit(selected.site, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${selected.tokenValue}`,
+          const response = await retryForbiddenResponseOnSameChannel(
+            () => fetchWithObservedFirstByte(
+              async (signal) => fetch(targetUrl, withSiteRecordProxyRequestInit(selected.site, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${selected.tokenValue}`,
+                },
+                body: JSON.stringify(forwardBody),
+                signal,
+              }, getProxyUrlFromExtraConfig(selected.account.extraConfig))),
+              {
+                firstByteTimeoutMs,
+                startedAtMs: Date.now(),
               },
-              body: JSON.stringify(forwardBody),
-              signal,
-            }, getProxyUrlFromExtraConfig(selected.account.extraConfig))),
-            {
-              firstByteTimeoutMs,
-              startedAtMs: attemptStartedAtMs,
-            },
+            ),
           );
           const observedFirstByteLatencyMs = getObservedResponseMeta(response)?.firstByteLatencyMs ?? null;
           const responseText = await response.text();
@@ -281,38 +283,41 @@ export async function imagesProxyRoute(app: FastifyInstance) {
 
       try {
         const { upstream, text, firstByteLatencyMs } = await runWithSiteApiEndpointPool(selected.site, async (target) => {
-          const attemptStartedAtMs = Date.now();
           const targetUrl = buildUpstreamUrl(target.baseUrl, '/v1/images/edits');
-          const requestInit = multipartForm
-            ? withSiteRecordProxyRequestInit(selected.site, {
-              method: 'POST',
-              headers: {
-                Authorization: `Bearer ${selected.tokenValue}`,
+          const response = await retryForbiddenResponseOnSameChannel(
+            () => fetchWithObservedFirstByte(
+              async (signal) => {
+                const requestInit = multipartForm
+                  ? withSiteRecordProxyRequestInit(selected.site, {
+                    method: 'POST',
+                    headers: {
+                      Authorization: `Bearer ${selected.tokenValue}`,
+                    },
+                    body: cloneFormDataWithOverrides(multipartForm, {
+                      model: upstreamModel,
+                    }) as any,
+                  }, getProxyUrlFromExtraConfig(selected.account.extraConfig))
+                  : withSiteRecordProxyRequestInit(selected.site, {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      Authorization: `Bearer ${selected.tokenValue}`,
+                    },
+                    body: JSON.stringify({
+                      ...(jsonBody || {}),
+                      model: upstreamModel,
+                    }),
+                  }, getProxyUrlFromExtraConfig(selected.account.extraConfig));
+                return fetch(targetUrl, {
+                  ...requestInit,
+                  signal,
+                });
               },
-              body: cloneFormDataWithOverrides(multipartForm, {
-                model: upstreamModel,
-              }) as any,
-            }, getProxyUrlFromExtraConfig(selected.account.extraConfig))
-            : withSiteRecordProxyRequestInit(selected.site, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${selected.tokenValue}`,
+              {
+                firstByteTimeoutMs,
+                startedAtMs: Date.now(),
               },
-              body: JSON.stringify({
-                ...(jsonBody || {}),
-                model: upstreamModel,
-              }),
-            }, getProxyUrlFromExtraConfig(selected.account.extraConfig));
-          const response = await fetchWithObservedFirstByte(
-            async (signal) => fetch(targetUrl, {
-              ...requestInit,
-              signal,
-            }),
-            {
-              firstByteTimeoutMs,
-              startedAtMs: attemptStartedAtMs,
-            },
+            ),
           );
           const observedFirstByteLatencyMs = getObservedResponseMeta(response)?.firstByteLatencyMs ?? null;
           const responseText = await response.text();

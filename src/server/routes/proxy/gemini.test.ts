@@ -1982,7 +1982,7 @@ describe('gemini native proxy routes', () => {
     expect(response.json().candidates?.[0]?.content?.parts?.[0]?.text).toContain('ok from fallback');
   });
 
-  it('falls back to the next channel when first Gemini channel returns 403 before any bytes are written', async () => {
+  it('retries the same Gemini channel when it returns a transient 403 before any bytes are written', async () => {
     selectNextChannelMock.mockReturnValue({
       channel: { id: 12, routeId: 22 },
       site: { id: 45, name: 'gemini-site-2', url: 'https://generativelanguage.googleapis.com', platform: 'gemini' },
@@ -2024,10 +2024,12 @@ describe('gemini native proxy routes', () => {
 
     expect(response.statusCode).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(recordFailureMock).toHaveBeenCalledWith(11, expect.objectContaining({
-      status: 403,
-      errorText: JSON.stringify({ error: { message: 'forbidden on first channel' } }),
-    }));
+    expect(selectNextChannelMock).not.toHaveBeenCalled();
+    expect(recordFailureMock).not.toHaveBeenCalled();
+    const [firstUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [secondUrl] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(firstUrl).toContain('key=gemini-key');
+    expect(secondUrl).toContain('key=gemini-key');
   });
 
   it('falls back to the next channel when first Gemini channel returns 500 before any bytes are written', async () => {
