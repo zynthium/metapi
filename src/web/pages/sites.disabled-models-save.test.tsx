@@ -10,6 +10,7 @@ const { apiMock, toastMock } = vi.hoisted(() => ({
     getSites: vi.fn(),
     getSiteDisabledModels: vi.fn(),
     getSiteAvailableModels: vi.fn(),
+    updateSite: vi.fn(),
     updateSiteDisabledModels: vi.fn(),
     rebuildRoutes: vi.fn(),
   },
@@ -58,10 +59,12 @@ describe('Sites disabled models save', () => {
         url: 'https://example.com',
         platform: 'new-api',
         status: 'active',
+        tokenHealthProbeModel: 'site-probe-model',
       },
     ]);
     apiMock.getSiteDisabledModels.mockResolvedValue({ models: [] });
     apiMock.getSiteAvailableModels.mockResolvedValue({ models: [] });
+    apiMock.updateSite.mockResolvedValue({ success: true });
     apiMock.updateSiteDisabledModels.mockResolvedValue({ success: true });
   });
 
@@ -119,6 +122,38 @@ describe('Sites disabled models save', () => {
       expect(apiMock.rebuildRoutes).toHaveBeenCalledWith(false, false);
       expect(toastMock.error).toHaveBeenCalledWith('禁用模型列表已保存，但路由重建失败，请手动刷新路由');
       expect(toastMock.success).not.toHaveBeenCalledWith('禁用模型列表已保存，路由已重建');
+    } finally {
+      root?.unmount();
+    }
+  });
+
+  it('saves site token health probe model from the probe settings panel', async () => {
+    let root!: WebTestRenderer;
+    try {
+      root = await renderSitesEditor();
+      expect(collectText(root.root)).toContain('站点令牌健康探测模型');
+
+      const probeModelInput = root.root.find((node) => (
+        node.type === 'input'
+        && node.props.placeholder === '留空则继承全局默认'
+      ));
+      await act(async () => {
+        probeModelInput.props.onChange({ target: { value: 'site-health-model' } });
+      });
+
+      const saveButton = root.root.find((node) => (
+        node.type === 'button'
+        && typeof node.props.onClick === 'function'
+        && collectText(node).includes('保存探测设置')
+      ));
+      await act(async () => {
+        await saveButton.props.onClick();
+      });
+      await flushMicrotasks();
+
+      expect(apiMock.updateSite).toHaveBeenCalledWith(1, expect.objectContaining({
+        tokenHealthProbeModel: 'site-health-model',
+      }));
     } finally {
       root?.unmount();
     }

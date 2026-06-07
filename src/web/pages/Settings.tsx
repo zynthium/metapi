@@ -89,6 +89,8 @@ type RuntimeSettings = {
   connectionMaintenanceAttemptTimeoutSec: number;
   connectionMaintenanceConcurrency: number;
   connectionMaintenanceStages: Record<string, boolean>;
+  tokenHealthProbeModel: string;
+  tokenHealthStaleHours: number;
   logCleanupCron: string;
   logCleanupUsageLogsEnabled: boolean;
   logCleanupProgramLogsEnabled: boolean;
@@ -377,6 +379,8 @@ export default function Settings() {
     connectionMaintenanceAttemptTimeoutSec: 15,
     connectionMaintenanceConcurrency: 3,
     connectionMaintenanceStages: DEFAULT_CONNECTION_MAINTENANCE_STAGES,
+    tokenHealthProbeModel: '',
+    tokenHealthStaleHours: 6,
     logCleanupCron: '0 6 * * *',
     logCleanupUsageLogsEnabled: false,
     logCleanupProgramLogsEnabled: false,
@@ -709,6 +713,12 @@ export default function Settings() {
           ...DEFAULT_CONNECTION_MAINTENANCE_STAGES,
           ...(runtimeInfo.connectionMaintenanceStages || {}),
         },
+        tokenHealthProbeModel: typeof runtimeInfo.tokenHealthProbeModel === 'string'
+          ? runtimeInfo.tokenHealthProbeModel
+          : '',
+        tokenHealthStaleHours: Number(runtimeInfo.tokenHealthStaleHours) >= 1
+          ? Math.trunc(Number(runtimeInfo.tokenHealthStaleHours))
+          : 6,
         logCleanupCron: runtimeInfo.logCleanupCron || '0 6 * * *',
         logCleanupUsageLogsEnabled: !!runtimeInfo.logCleanupUsageLogsEnabled,
         logCleanupProgramLogsEnabled: !!runtimeInfo.logCleanupProgramLogsEnabled,
@@ -834,6 +844,8 @@ export default function Settings() {
         connectionMaintenanceAttemptTimeoutSec: runtime.connectionMaintenanceAttemptTimeoutSec,
         connectionMaintenanceConcurrency: runtime.connectionMaintenanceConcurrency,
         connectionMaintenanceStages: runtime.connectionMaintenanceStages,
+        tokenHealthProbeModel: runtime.tokenHealthProbeModel.trim(),
+        tokenHealthStaleHours: runtime.tokenHealthStaleHours,
         logCleanupCron: runtime.logCleanupCron,
         logCleanupUsageLogsEnabled: runtime.logCleanupUsageLogsEnabled,
         logCleanupProgramLogsEnabled: runtime.logCleanupProgramLogsEnabled,
@@ -1521,6 +1533,30 @@ export default function Settings() {
                   {stage.label}
                 </label>
               ))}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 160px', gap: 12 }}>
+              <div>
+                <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 6 }}>全局令牌健康探测模型</div>
+                <input
+                  value={runtime.tokenHealthProbeModel}
+                  placeholder="例如 gpt-5-mini"
+                  onChange={(e) => setRuntime((prev) => ({ ...prev, tokenHealthProbeModel: e.target.value }))}
+                  style={{ ...inputStyle, fontFamily: 'var(--font-mono)' }}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 6 }}>令牌健康过期小时</div>
+                <input
+                  type="number"
+                  min={1}
+                  value={runtime.tokenHealthStaleHours}
+                  onChange={(e) => setRuntime((prev) => ({
+                    ...prev,
+                    tokenHealthStaleHours: Math.max(1, Math.trunc(Number(e.target.value) || prev.tokenHealthStaleHours)),
+                  }))}
+                  style={inputStyle}
+                />
+              </div>
             </div>
             <div style={{ fontSize: 12, color: 'var(--color-text-muted)', lineHeight: 1.6 }}>
               旧的 balance_refresh_cron 仍作为兼容 fallback；连接维护会统一刷新站点、账号健康、令牌、倍率、模型和路由快照。

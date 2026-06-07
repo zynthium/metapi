@@ -46,6 +46,7 @@ export type SiteSavePayload = {
   postRefreshProbeModel?: string;
   postRefreshProbeScope?: 'single' | 'all';
   postRefreshProbeLatencyThresholdMs?: number;
+  tokenHealthProbeModel?: string;
 };
 
 type SiteSaveAction =

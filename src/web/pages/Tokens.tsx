@@ -45,6 +45,15 @@ type AccountTokenSyncResult = {
   };
 };
 
+type TokenHealthStatus =
+  | 'healthy'
+  | 'pending_probe'
+  | 'request_failed_pending_probe'
+  | 'probe_failed'
+  | 'not_probeable';
+
+type ProbeModelSource = 'token' | 'site' | 'global' | 'missing';
+
 type SyncableAccount = {
   id: number;
   username?: string | null;
@@ -97,6 +106,62 @@ const resolveAccountLabel = (result: AccountTokenSyncResult | null | undefined) 
   if (accountId) return `#${accountId}`;
   return '未知账号';
 };
+
+const probeModelSourceLabels: Record<ProbeModelSource, string> = {
+  token: '令牌',
+  site: '站点',
+  global: '全局',
+  missing: '未配置',
+};
+
+const tokenHealthBadgeClasses: Record<TokenHealthStatus, string> = {
+  healthy: 'badge-success',
+  pending_probe: 'badge-muted',
+  request_failed_pending_probe: 'badge-warning',
+  probe_failed: 'badge-error',
+  not_probeable: 'badge-muted',
+};
+
+function getTokenHealthBadgeClass(status: string | null | undefined): string {
+  return tokenHealthBadgeClasses[(status || '') as TokenHealthStatus] || 'badge-muted';
+}
+
+function getProbeModelSourceLabel(source: string | null | undefined): string {
+  return probeModelSourceLabels[(source || 'missing') as ProbeModelSource] || '未配置';
+}
+
+function renderTokenHealth(token: any) {
+  const health = token?.health;
+  const label = health?.label || (health?.status ? String(health.status) : '未探测');
+  const probeModel = health?.probeModel || token?.probeModel || '';
+  const probeModelSource = getProbeModelSourceLabel(health?.probeModelSource || (token?.probeModel ? 'token' : 'missing'));
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 150 }}>
+      <span className={`badge ${getTokenHealthBadgeClass(health?.status)}`} style={{ fontSize: 11, width: 'fit-content' }}>
+        {label}
+      </span>
+      <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
+        {probeModel ? `探测模型：${probeModel}（${probeModelSource}）` : '探测模型：未配置'}
+      </span>
+      {health?.lastError ? (
+        <span
+          title={health.lastError}
+          style={{
+            fontSize: 11,
+            color: 'var(--color-text-muted)',
+            maxWidth: 220,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {health.lastError}
+        </span>
+      ) : null}
+    </div>
+  );
+}
 
 async function copyText(text: string) {
   if (navigator.clipboard?.writeText) {
@@ -163,6 +228,8 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
     group: 'default',
     enabled: true,
     isDefault: false,
+    probeModelMode: 'inherit' as 'inherit' | 'custom',
+    probeModel: '',
   });
   const [groupOptions, setGroupOptions] = useState<string[]>(['default']);
   const [groupLoading, setGroupLoading] = useState(false);
@@ -494,6 +561,8 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
       group: (token?.tokenGroup || '').trim() || 'default',
       enabled: isMaskedPendingToken(token) ? true : token?.enabled !== false,
       isDefault: !!token?.isDefault,
+      probeModelMode: token?.probeModel ? 'custom' : 'inherit',
+      probeModel: token?.probeModel || token?.health?.probeModel || '',
     });
 
     if (isMaskedPendingToken(token)) {
@@ -533,6 +602,8 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
       group: 'default',
       enabled: true,
       isDefault: false,
+      probeModelMode: 'inherit',
+      probeModel: '',
     });
   }, []);
 
@@ -550,6 +621,7 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
         group: editForm.group || 'default',
         enabled: editForm.enabled,
         isDefault: editForm.isDefault,
+        probeModel: editForm.probeModelMode === 'custom' ? editForm.probeModel.trim() : '',
       });
       toast.success('令牌已更新');
       closeEditPanel();
@@ -592,6 +664,14 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
     } catch (error: any) {
       toast.error(error?.message || '复制令牌失败');
     }
+  };
+
+  const handleProbeToken = async (token: any) => {
+    await withRowLoading(`token-${token.id}-probe`, async () => {
+      await api.probeAccountTokenHealth(token.id, true);
+      toast.success('令牌探测已完成');
+      await load();
+    });
   };
 
   const handleAddToken = async () => {
@@ -1030,6 +1110,48 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
                 </label>
               </ResponsiveFormGrid>
             </div>
+            <div style={sectionCardStyle}>
+              <div style={sectionLabelStyle}>健康探测</div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <label style={toggleCardStyle}>
+                  <input
+                    type="radio"
+                    name="token-probe-model-mode"
+                    value="inherit"
+                    checked={editForm.probeModelMode === 'inherit'}
+                    onChange={() => setEditForm((prev) => ({ ...prev, probeModelMode: 'inherit' }))}
+                    style={{ marginTop: 2 }}
+                  />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>继承探测模型</span>
+                    <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+                      当前有效：{editingToken.health?.probeModel || '未配置'}
+                    </span>
+                  </div>
+                </label>
+                <label style={toggleCardStyle}>
+                  <input
+                    type="radio"
+                    name="token-probe-model-mode"
+                    value="custom"
+                    checked={editForm.probeModelMode === 'custom'}
+                    onChange={() => setEditForm((prev) => ({ ...prev, probeModelMode: 'custom' }))}
+                    style={{ marginTop: 2 }}
+                  />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>自定义探测模型</span>
+                    <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>仅覆盖当前令牌</span>
+                  </div>
+                </label>
+              </div>
+              <input
+                placeholder="例如 gpt-5-mini"
+                value={editForm.probeModel}
+                onChange={(e) => setEditForm((prev) => ({ ...prev, probeModel: e.target.value }))}
+                disabled={editForm.probeModelMode !== 'custom'}
+                style={inputStyle}
+              />
+            </div>
           </>
         ) : null}
       </CenteredModal>
@@ -1238,6 +1360,11 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
                         </span>
                       )}
                     />
+                    <MobileField
+                      label="健康"
+                      stacked
+                      value={renderTokenHealth(token)}
+                    />
                     {isExpanded ? (
                       <div className="mobile-card-extra">
                         <MobileField
@@ -1285,6 +1412,15 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
                           )}
                           {!isPending ? (
                             <button
+                              onClick={() => handleProbeToken(token)}
+                              disabled={!!rowLoading[`${loadingPrefix}-probe`]}
+                              className="btn btn-link btn-link-info"
+                            >
+                              {rowLoading[`${loadingPrefix}-probe`] ? <span className="spinner spinner-sm" /> : '探测'}
+                            </button>
+                          ) : null}
+                          {!isPending ? (
+                            <button
                               onClick={() => withRowLoading(`${loadingPrefix}-toggle`, async () => {
                                 await api.updateAccountToken(token.id, { enabled: !token.enabled });
                                 toast.success(token.enabled ? '令牌已禁用' : '令牌已启用');
@@ -1328,6 +1464,7 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
                 <th>分组</th>
                 <th>倍率</th>
                 <th>状态</th>
+                <th>健康</th>
                 <th>默认</th>
                 <th>更新时间</th>
                 <th className="token-table-actions-col" style={{ textAlign: 'right' }}>操作</th>
@@ -1390,6 +1527,7 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
                         </span>
                       )}
                     </td>
+                    <td>{renderTokenHealth(token)}</td>
                     <td>{token.isDefault ? <span className="badge badge-warning" style={{ fontSize: 11 }}>默认</span> : '-'}</td>
                     <td style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{formatDateTimeLocal(token.updatedAt)}</td>
                     <td className="token-actions-cell" style={{ textAlign: 'right' }}>
@@ -1423,6 +1561,15 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
                         >
                           {isPending ? '编辑补全' : '编辑'}
                         </button>
+                        {!isPending ? (
+                          <button
+                            onClick={() => handleProbeToken(token)}
+                            disabled={!!rowLoading[`${loadingPrefix}-probe`]}
+                            className="btn btn-link btn-link-info token-table-action-btn"
+                          >
+                            {rowLoading[`${loadingPrefix}-probe`] ? <span className="spinner spinner-sm" /> : '探测'}
+                          </button>
+                        ) : null}
                         {!isPending ? (
                           <button
                             onClick={() => withRowLoading(`${loadingPrefix}-toggle`, async () => {

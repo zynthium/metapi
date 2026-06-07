@@ -388,6 +388,8 @@ export type RuntimeSettingsPayload = {
   connectionMaintenanceAttemptTimeoutSec?: number;
   connectionMaintenanceConcurrency?: number;
   connectionMaintenanceStages?: Record<string, boolean>;
+  tokenHealthProbeModel?: string;
+  tokenHealthStaleHours?: number;
   logCleanupCron?: string;
   logCleanupUsageLogsEnabled?: boolean;
   logCleanupProgramLogsEnabled?: boolean;
@@ -899,6 +901,12 @@ export const api = {
     request(`/api/account-tokens/${id}/default`, { method: "POST" }),
   getAccountTokenValue: (id: number) =>
     request(`/api/account-tokens/${id}/value`),
+  probeAccountTokenHealth: (id: number, wait = true) =>
+    request(`/api/account-tokens/${id}/health/probe`, {
+      method: "POST",
+      body: JSON.stringify({ wait }),
+      timeoutMs: wait ? 120_000 : 30_000,
+    }),
   syncAccountTokens: (accountId: number) =>
     request(`/api/account-tokens/sync/${accountId}`, {
       method: "POST",

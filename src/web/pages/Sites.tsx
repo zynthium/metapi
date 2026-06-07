@@ -73,6 +73,7 @@ type SiteRow = {
   postRefreshProbeModel?: string | null;
   postRefreshProbeScope?: string | null;
   postRefreshProbeLatencyThresholdMs?: number | null;
+  tokenHealthProbeModel?: string | null;
   apiEndpoints?: Array<{
     id?: number;
     url: string;
@@ -320,6 +321,7 @@ export default function Sites() {
   const [probeScope, setProbeScope] = useState<'single' | 'all'>('single');
   const [probeSaving, setProbeSaving] = useState(false);
   const [probeLatencyThreshold, setProbeLatencyThreshold] = useState('0');
+  const [tokenHealthProbeModel, setTokenHealthProbeModel] = useState('');
   const [probing, setProbing] = useState(false);
   type ProbeLogEntry = { time: string; text: string; color?: string };
   const [probeLog, setProbeLog] = useState<ProbeLogEntry[]>([]);
@@ -521,6 +523,7 @@ export default function Sites() {
     setProbeModel(typeof site.postRefreshProbeModel === 'string' ? site.postRefreshProbeModel : '');
     setProbeScope(site.postRefreshProbeScope === 'all' ? 'all' : 'single');
     setProbeLatencyThreshold(String(site.postRefreshProbeLatencyThresholdMs ?? 0));
+    setTokenHealthProbeModel(typeof site.tokenHealthProbeModel === 'string' ? site.tokenHealthProbeModel : '');
     setProbeLog([]);
     setProbeCompleted(false);
     probeAbortRef.current?.abort();
@@ -593,9 +596,17 @@ export default function Sites() {
         postRefreshProbeModel: probeModel.trim(),
         postRefreshProbeScope: probeScope,
         postRefreshProbeLatencyThresholdMs: Math.max(0, parseInt(probeLatencyThreshold, 10) || 0),
+        tokenHealthProbeModel: tokenHealthProbeModel.trim(),
       });
       setSites((prev) => prev.map((s) => s.id === editor.editingSiteId
-        ? { ...s, postRefreshProbeEnabled: probeEnabled, postRefreshProbeModel: probeModel.trim(), postRefreshProbeScope: probeScope, postRefreshProbeLatencyThresholdMs: Math.max(0, parseInt(probeLatencyThreshold, 10) || 0) }
+        ? {
+          ...s,
+          postRefreshProbeEnabled: probeEnabled,
+          postRefreshProbeModel: probeModel.trim(),
+          postRefreshProbeScope: probeScope,
+          postRefreshProbeLatencyThresholdMs: Math.max(0, parseInt(probeLatencyThreshold, 10) || 0),
+          tokenHealthProbeModel: tokenHealthProbeModel.trim(),
+        }
         : s,
       ));
       toast.success('刷新后探测设置已保存');
@@ -772,6 +783,7 @@ export default function Sites() {
       postRefreshProbeModel: probeModel.trim(),
       postRefreshProbeScope: probeScope,
       postRefreshProbeLatencyThresholdMs: Math.max(0, parseInt(probeLatencyThreshold, 10) || 0),
+      tokenHealthProbeModel: tokenHealthProbeModel.trim(),
     };
     if (!payload.name || !payload.url) {
       toast.error('请填写站点名称和 URL');
@@ -1785,6 +1797,21 @@ export default function Sites() {
                   }}
                 />
               )}
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 6 }}>站点令牌健康探测模型</div>
+                <input
+                  type="text"
+                  placeholder="留空则继承全局默认"
+                  value={tokenHealthProbeModel}
+                  onChange={(e) => setTokenHealthProbeModel(e.target.value)}
+                  style={{
+                    width: '100%', padding: '6px 10px', border: '1px solid var(--color-border)',
+                    borderRadius: 'var(--radius-sm)', fontSize: 12, outline: 'none',
+                    background: 'var(--color-bg)', color: 'var(--color-text-primary)',
+                    fontFamily: 'var(--font-mono)',
+                  }}
+                />
+              </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                 <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>延迟阈值</span>
                 <input

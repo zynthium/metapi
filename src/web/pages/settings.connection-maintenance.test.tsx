@@ -67,6 +67,8 @@ describe('Settings connection maintenance', () => {
         tokens: true,
         groupRatios: true,
       },
+      tokenHealthProbeModel: 'gpt-5-mini',
+      tokenHealthStaleHours: 12,
       logCleanupCron: '15 4 * * *',
       logCleanupUsageLogsEnabled: true,
       logCleanupProgramLogsEnabled: true,
@@ -118,8 +120,52 @@ describe('Settings connection maintenance', () => {
         .map((node) => node.props.value);
       expect(text).toContain('连接维护');
       expect(inputValues).toContain('*/15 * * * *');
+      expect(text).toContain('全局令牌健康探测模型');
+      expect(inputValues).toContain('gpt-5-mini');
+      expect(inputValues).toContain(12);
       expect(text).toContain('重试次数');
       expect(text).toContain('并发');
+    } finally {
+      root?.unmount();
+    }
+  });
+
+  it('saves token health probe defaults with schedule settings', async () => {
+    let root!: ReactTestRenderer;
+    try {
+      await act(async () => {
+        root = create(
+          <MemoryRouter>
+            <ToastProvider>
+              <Settings />
+            </ToastProvider>
+          </MemoryRouter>,
+        );
+      });
+      await flushMicrotasks();
+
+      const probeModelInput = root.root.find((node) => (
+        node.type === 'input'
+        && node.props.placeholder === '例如 gpt-5-mini'
+      ));
+      await act(async () => {
+        probeModelInput.props.onChange({ target: { value: 'gpt-5' } });
+      });
+
+      const saveButton = root.root.find((node) => (
+        node.type === 'button'
+        && typeof node.props.onClick === 'function'
+        && collectText(node).trim() === '保存定时任务'
+      ));
+      await act(async () => {
+        await saveButton.props.onClick();
+      });
+      await flushMicrotasks();
+
+      expect(apiMock.updateRuntimeSettings).toHaveBeenCalledWith(expect.objectContaining({
+        tokenHealthProbeModel: 'gpt-5',
+        tokenHealthStaleHours: 12,
+      }));
     } finally {
       root?.unmount();
     }
