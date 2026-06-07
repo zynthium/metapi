@@ -18,8 +18,10 @@ import { decryptAccountPassword } from './accountCredentialService.js';
 import { setAccountRuntimeHealth } from './accountHealthService.js';
 import { formatUtcSqlDateTime } from './localTimeService.js';
 import { withAccountProxyOverride } from './siteProxy.js';
+import { isRetryableRemoteMessage, retryRemoteOperation } from './remoteRetry.js';
 
 type CheckinExecutionStatus = 'success' | 'failed' | 'skipped';
+const CHECKIN_RETRY_ATTEMPTS = 3;
 
 function isSiteDisabled(status?: string | null): boolean {
   return (status || 'active') === 'disabled';
@@ -178,16 +180,29 @@ export async function checkinAccount(accountId: number, options?: { skipEvent?: 
   const platformUserId = resolvePlatformUserId(account.extraConfig, account.username);
 
   const accountProxyUrl = resolveProxyUrlFromExtraConfig(account.extraConfig);
+  const runCheckin = (token: string) => retryRemoteOperation({
+    label: `checkin:${accountId}`,
+    attempts: CHECKIN_RETRY_ATTEMPTS,
+    run: () => withAccountProxyOverride(accountProxyUrl,
+      () => adapter.checkin(site.url, token, platformUserId)),
+    shouldRetryResult: (candidate) => (
+      !candidate.success
+      && !isAlreadyCheckedInMessage(candidate.message)
+      && !isUnsupportedCheckinMessage(candidate.message)
+      && !isManualVerificationRequiredMessage(candidate.message)
+      && !shouldAttemptAutoRelogin(candidate.message)
+      && isRetryableRemoteMessage(candidate.message)
+    ),
+  });
+
   let activeAccessToken = account.accessToken;
-  let result = await withAccountProxyOverride(accountProxyUrl,
-    () => adapter.checkin(site.url, activeAccessToken, platformUserId));
+  let result = await runCheckin(activeAccessToken);
 
   if (!result.success && shouldAttemptAutoRelogin(result.message)) {
     const refreshedAccessToken = await tryAutoRelogin(account, site);
     if (refreshedAccessToken) {
       activeAccessToken = refreshedAccessToken;
-      result = await withAccountProxyOverride(accountProxyUrl,
-        () => adapter.checkin(site.url, activeAccessToken, platformUserId));
+      result = await runCheckin(activeAccessToken);
     }
   }
 

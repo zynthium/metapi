@@ -216,6 +216,47 @@ describe('refreshModelsForAccount credential discovery', () => {
     expect(rows.map((row) => row.modelName).sort()).toEqual(['?', 'GPT-4.1']);
   });
 
+  it('retries transient model discovery failures before marking runtime health unhealthy', async () => {
+    getApiTokenMock.mockResolvedValue(null);
+    getModelsMock
+      .mockRejectedValueOnce(new Error('fetch failed'))
+      .mockResolvedValueOnce(['gpt-5-nano']);
+
+    const site = await db.insert(schema.sites).values({
+      name: 'site-model-retry',
+      url: 'https://site-model-retry.example.com',
+      platform: 'new-api',
+      status: 'active',
+    }).returning().get();
+
+    const account = await db.insert(schema.accounts).values({
+      siteId: site.id,
+      username: 'model-retry-user',
+      accessToken: '',
+      apiToken: 'sk-model-retry',
+      status: 'active',
+    }).returning().get();
+
+    const result = await refreshModelsForAccount(account.id);
+
+    expect(result).toMatchObject({
+      accountId: account.id,
+      refreshed: true,
+      status: 'success',
+      modelCount: 1,
+      modelsPreview: ['gpt-5-nano'],
+    });
+    expect(getModelsMock).toHaveBeenCalledTimes(2);
+
+    const updatedAccount = await db.select().from(schema.accounts)
+      .where(eq(schema.accounts.id, account.id))
+      .get();
+    expect(JSON.parse(updatedAccount!.extraConfig || '{}')?.runtimeHealth).toMatchObject({
+      state: 'healthy',
+      source: 'model-discovery',
+    });
+  });
+
   it('reuses one in-flight full refresh when concurrent callers request a rebuild', async () => {
     getApiTokenMock.mockResolvedValue(null);
 

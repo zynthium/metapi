@@ -9,6 +9,7 @@ import {
 } from './upstreamEndpointRuntime.js';
 import { executeEndpointFlow, type BuiltEndpointRequest } from '../proxy-core/orchestration/endpointFlow.js';
 import type { schema } from '../db/index.js';
+import { DEFAULT_REMOTE_RETRY_ATTEMPTS } from './remoteRetry.js';
 
 export type RuntimeModelProbeStatus = 'supported' | 'unsupported' | 'inconclusive' | 'skipped';
 
@@ -83,6 +84,7 @@ function isLikelyConversationModel(modelName: string): boolean {
 }
 
 function classifyUnsupportedFailure(status: number, rawErrorText: string): boolean {
+  if (status === 403) return false;
   if (![400, 403, 404, 422].includes(status)) return false;
   const normalized = String(rawErrorText || '').trim();
   if (!normalized) return false;
@@ -97,6 +99,7 @@ function isQuotaExhaustedFailure(rawErrorText: string): boolean {
 function isRetryableFailure(status: number, rawErrorText: string): boolean {
   if (isQuotaExhaustedFailure(rawErrorText)) return false;
   if (classifyUnsupportedFailure(status, rawErrorText)) return false;
+  if (status === 403) return true;
   if ([401, 403, 404, 422].includes(status)) return false;
   if ([408, 409, 425, 429, 500, 502, 503, 504, 520, 522, 524].includes(status)) return true;
   if (status <= 0) return true;
@@ -164,6 +167,7 @@ export async function probeRuntimeModel(input: {
   timeoutMs: number;
   tokenValue?: string | null;
   probeKind?: RuntimeModelProbeKind;
+  retryAttempts?: number;
 }): Promise<RuntimeModelProbeResult> {
   if (!isLikelyConversationModel(input.modelName)) {
     return {
@@ -191,131 +195,149 @@ export async function probeRuntimeModel(input: {
 
   const startedAt = Date.now();
   const deadlineAtMs = startedAt + Math.max(1, input.timeoutMs);
-  try {
-    const endpointCandidates = await withTimeout(
-      () => resolveUpstreamEndpointCandidates(
-        {
-          site: input.site,
-          account: input.account,
-        },
-        input.modelName,
-        'openai',
-        input.modelName,
-      ),
-      resolveRemainingTimeoutMs(
-        deadlineAtMs,
+  const retryAttempts = Math.max(1, Math.trunc(input.retryAttempts || DEFAULT_REMOTE_RETRY_ATTEMPTS));
+
+  for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
+    try {
+      const endpointCandidates = await withTimeout(
+        () => resolveUpstreamEndpointCandidates(
+          {
+            site: input.site,
+            account: input.account,
+          },
+          input.modelName,
+          'openai',
+          input.modelName,
+        ),
+        resolveRemainingTimeoutMs(
+          deadlineAtMs,
+          `runtime model probe candidate resolution timeout (${Math.round(input.timeoutMs / 1000)}s)`,
+        ),
         `runtime model probe candidate resolution timeout (${Math.round(input.timeoutMs / 1000)}s)`,
-      ),
-      `runtime model probe candidate resolution timeout (${Math.round(input.timeoutMs / 1000)}s)`,
-    );
-    if (endpointCandidates.length <= 0) {
+      );
+      if (endpointCandidates.length <= 0) {
+        return {
+          status: 'inconclusive',
+          latencyMs: Date.now() - startedAt,
+          reason: 'no compatible probe endpoint candidates',
+          retryable: false,
+        };
+      }
+
+      const providerHeaders = buildOauthProviderHeaders({
+        account: input.account,
+        downstreamHeaders: {},
+      });
+      const openaiBody = buildProbeBody(input.modelName, input.probeKind || 'model-availability');
+      const channelProxyUrl = resolveChannelProxyUrl(input.site, input.account.extraConfig);
+      const abortController = new AbortController();
+      const remainingExecutionTimeoutMs = resolveRemainingTimeoutMs(
+        deadlineAtMs,
+        `runtime model probe timeout (${Math.round(input.timeoutMs / 1000)}s)`,
+      );
+      const abortTimer = setTimeout(() => {
+        abortController.abort(new Error(`runtime model probe timeout (${Math.round(input.timeoutMs / 1000)}s)`));
+      }, remainingExecutionTimeoutMs);
+      abortTimer.unref?.();
+
+      const buildRequest = (endpoint: UpstreamEndpoint): BuiltEndpointRequest => {
+        const request = buildUpstreamEndpointRequest({
+          endpoint,
+          modelName: input.modelName,
+          stream: false,
+          tokenValue,
+          oauthProvider: oauth?.provider,
+          oauthProjectId: oauth?.projectId,
+          sitePlatform: input.site.platform,
+          siteUrl: input.site.url,
+          openaiBody,
+          downstreamFormat: 'openai',
+          downstreamHeaders: {},
+          providerHeaders,
+        });
+        return {
+          endpoint,
+          path: request.path,
+          headers: request.headers,
+          body: request.body as Record<string, unknown>,
+          runtime: request.runtime,
+        };
+      };
+      const dispatchRequest = async (
+        request: BuiltEndpointRequest,
+        targetUrl: string,
+      ) => (
+        dispatchRuntimeRequest({
+          siteUrl: input.site.url,
+          targetUrl,
+          request,
+          buildInit: (_requestUrl, requestForFetch) => withSiteRecordProxyRequestInit(
+            input.site,
+            {
+              method: 'POST',
+              headers: requestForFetch.headers,
+              body: JSON.stringify(requestForFetch.body),
+              signal: abortController.signal,
+            },
+            channelProxyUrl,
+          ),
+        })
+      );
+
+      let result: Awaited<ReturnType<typeof executeEndpointFlow>>;
+      try {
+        result = await executeEndpointFlow({
+          siteUrl: input.site.url,
+          proxyUrl: channelProxyUrl,
+          endpointCandidates,
+          buildRequest,
+          dispatchRequest,
+        });
+      } finally {
+        clearTimeout(abortTimer);
+      }
+      const latencyMs = Date.now() - startedAt;
+
+      if (result.ok) {
+        await result.upstream.text().catch(() => undefined);
+        return {
+          status: 'supported',
+          latencyMs,
+          reason: 'probe succeeded',
+          retryable: false,
+        };
+      }
+
+      const rawErrorText = String(result.rawErrText || result.errText || '').trim();
+      const status = result.status || 0;
+      const unsupported = classifyUnsupportedFailure(status, rawErrorText);
+      const retryable = !unsupported && isRetryableFailure(status, rawErrorText);
+      if (retryable && attempt < retryAttempts) {
+        continue;
+      }
+      return {
+        status: unsupported ? 'unsupported' : 'inconclusive',
+        latencyMs,
+        reason: rawErrorText || `probe failed with status ${status}`,
+        retryable,
+      };
+    } catch (error) {
+      if (attempt < retryAttempts) {
+        continue;
+      }
       return {
         status: 'inconclusive',
         latencyMs: Date.now() - startedAt,
-        reason: 'no compatible probe endpoint candidates',
-        retryable: false,
+        reason: error instanceof Error ? error.message : 'probe failed',
+        retryable: true,
       };
     }
-
-    const providerHeaders = buildOauthProviderHeaders({
-      account: input.account,
-      downstreamHeaders: {},
-    });
-    const openaiBody = buildProbeBody(input.modelName, input.probeKind || 'model-availability');
-    const channelProxyUrl = resolveChannelProxyUrl(input.site, input.account.extraConfig);
-    const abortController = new AbortController();
-    const remainingExecutionTimeoutMs = resolveRemainingTimeoutMs(
-      deadlineAtMs,
-      `runtime model probe timeout (${Math.round(input.timeoutMs / 1000)}s)`,
-    );
-    const abortTimer = setTimeout(() => {
-      abortController.abort(new Error(`runtime model probe timeout (${Math.round(input.timeoutMs / 1000)}s)`));
-    }, remainingExecutionTimeoutMs);
-    abortTimer.unref?.();
-
-    const buildRequest = (endpoint: UpstreamEndpoint): BuiltEndpointRequest => {
-      const request = buildUpstreamEndpointRequest({
-        endpoint,
-        modelName: input.modelName,
-        stream: false,
-        tokenValue,
-        oauthProvider: oauth?.provider,
-        oauthProjectId: oauth?.projectId,
-        sitePlatform: input.site.platform,
-        siteUrl: input.site.url,
-        openaiBody,
-        downstreamFormat: 'openai',
-        downstreamHeaders: {},
-        providerHeaders,
-      });
-      return {
-        endpoint,
-        path: request.path,
-        headers: request.headers,
-        body: request.body as Record<string, unknown>,
-        runtime: request.runtime,
-      };
-    };
-    const dispatchRequest = async (
-      request: BuiltEndpointRequest,
-      targetUrl: string,
-    ) => (
-      dispatchRuntimeRequest({
-        siteUrl: input.site.url,
-        targetUrl,
-        request,
-        buildInit: (_requestUrl, requestForFetch) => withSiteRecordProxyRequestInit(
-          input.site,
-          {
-            method: 'POST',
-            headers: requestForFetch.headers,
-            body: JSON.stringify(requestForFetch.body),
-            signal: abortController.signal,
-          },
-          channelProxyUrl,
-        ),
-      })
-    );
-
-    let result: Awaited<ReturnType<typeof executeEndpointFlow>>;
-    try {
-      result = await executeEndpointFlow({
-        siteUrl: input.site.url,
-        proxyUrl: channelProxyUrl,
-        endpointCandidates,
-        buildRequest,
-        dispatchRequest,
-      });
-    } finally {
-      clearTimeout(abortTimer);
-    }
-    const latencyMs = Date.now() - startedAt;
-
-    if (result.ok) {
-      await result.upstream.text().catch(() => undefined);
-      return {
-        status: 'supported',
-        latencyMs,
-        reason: 'probe succeeded',
-        retryable: false,
-      };
-    }
-
-    const rawErrorText = String(result.rawErrText || result.errText || '').trim();
-    const status = result.status || 0;
-    const unsupported = classifyUnsupportedFailure(status, rawErrorText);
-    return {
-      status: unsupported ? 'unsupported' : 'inconclusive',
-      latencyMs,
-      reason: rawErrorText || `probe failed with status ${status}`,
-      retryable: !unsupported && isRetryableFailure(status, rawErrorText),
-    };
-  } catch (error) {
-    return {
-      status: 'inconclusive',
-      latencyMs: Date.now() - startedAt,
-      reason: error instanceof Error ? error.message : 'probe failed',
-      retryable: true,
-    };
   }
+
+  return {
+    status: 'inconclusive',
+    latencyMs: Date.now() - startedAt,
+    reason: 'probe failed',
+    retryable: true,
+  };
 }

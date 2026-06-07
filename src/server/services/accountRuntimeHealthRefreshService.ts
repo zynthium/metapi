@@ -128,7 +128,10 @@ export async function refreshRuntimeHealthForAccountRow(input: {
     attempts: input.retryAttempts,
     attemptTimeoutMs: input.attemptTimeoutMs,
     backoffMs: input.backoffMs,
-    run: () => refreshBalance(accountId, { updateRuntimeHealthOnFailure: false }),
+    run: () => refreshBalance(accountId, {
+      updateRuntimeHealthOnFailure: false,
+      retryAttempts: 1,
+    }),
   });
 
   if (!retry.ok) {

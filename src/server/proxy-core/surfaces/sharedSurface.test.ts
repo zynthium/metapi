@@ -515,6 +515,46 @@ describe('selectSurfaceChannelForAttempt', () => {
     }));
   });
 
+  it('does not report token expiration while a retryable upstream failure can still retry', async () => {
+    composeProxyLogMessageMock.mockReturnValue('normalized error');
+    formatUtcSqlDateTimeMock.mockReturnValue('2026-03-21 22:00:00');
+    insertProxyLogMock.mockResolvedValue(undefined);
+    shouldRetryProxyRequestMock.mockReturnValue(true);
+    isTokenExpiredErrorMock.mockReturnValue(true);
+    recordOauthQuotaResetHintMock.mockResolvedValue(null);
+
+    const { createSurfaceFailureToolkit } = await import('./sharedSurface.js');
+    const toolkit = createSurfaceFailureToolkit({
+      warningScope: 'responses',
+      downstreamPath: '/v1/responses',
+      maxRetries: 2,
+      clientContext: null,
+      downstreamApiKeyId: null,
+    });
+
+    const result = await toolkit.handleUpstreamFailure({
+      selected: {
+        channel: { id: 11, routeId: 22 },
+        account: { id: 33, username: 'oauth-user' },
+        site: { name: 'Codex OAuth' },
+        actualModel: 'upstream-model',
+      },
+      requestedModel: 'gpt-5.2',
+      modelName: 'upstream-model',
+      status: 401,
+      errText: 'expired token',
+      rawErrText: 'expired token',
+      latencyMs: 900,
+      retryCount: 0,
+    });
+
+    await Promise.resolve();
+
+    expect(result).toEqual({ action: 'retry' });
+    expect(reportTokenExpiredMock).not.toHaveBeenCalled();
+    expect(reportProxyAllFailedMock).not.toHaveBeenCalled();
+  });
+
   it('keeps retryable failures on the retry path even when quota hint recording fails', async () => {
     composeProxyLogMessageMock.mockReturnValue('normalized error');
     formatUtcSqlDateTimeMock.mockReturnValue('2026-03-21 22:00:00');

@@ -567,6 +567,11 @@ export function createSurfaceFailureToolkit(input: {
         errorText: rawErrText,
       }));
 
+      if (shouldRetryProxyRequest(args.status, args.errText)) {
+        const retry = maybeRetry(args.retryCount);
+        if (retry) return retry;
+      }
+
       if (isTokenExpiredError({ status: args.status, message: args.errText })) {
         runBestEffort('report token expired', () => reportTokenExpired({
           accountId: args.selected.account.id,
@@ -574,11 +579,6 @@ export function createSurfaceFailureToolkit(input: {
           siteName: args.selected.site.name,
           detail: `HTTP ${args.status}`,
         }));
-      }
-
-      if (shouldRetryProxyRequest(args.status, args.errText)) {
-        const retry = maybeRetry(args.retryCount);
-        if (retry) return retry;
       }
 
       runBestEffort('report proxy all failed', () => reportProxyAllFailed({

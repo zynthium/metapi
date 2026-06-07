@@ -172,6 +172,10 @@ export async function videosProxyRoute(app: FastifyInstance) {
           errorText,
           modelName: upstreamModel,
         }));
+        if ((status > 0 ? shouldRetryProxyRequest(status, errorText) : true) && canRetryChannelSelection(retryCount, forcedChannelId)) {
+          retryCount += 1;
+          continue;
+        }
         if (status > 0 && isTokenExpiredError({ status, message: errorText })) {
           await reportTokenExpired({
             accountId: selected.account.id,
@@ -179,10 +183,6 @@ export async function videosProxyRoute(app: FastifyInstance) {
             siteName: selected.site.name,
             detail: `HTTP ${status}`,
           });
-        }
-        if ((status > 0 ? shouldRetryProxyRequest(status, errorText) : true) && canRetryChannelSelection(retryCount, forcedChannelId)) {
-          retryCount += 1;
-          continue;
         }
         await reportProxyAllFailed({
           model: requestedModel,

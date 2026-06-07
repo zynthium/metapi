@@ -36,9 +36,11 @@ import {
 } from './platformDiscoveryRegistry.js';
 import { probeRuntimeModel, type RuntimeModelProbeStatus } from './runtimeModelProbe.js';
 import { getAccountGroupRatioMap } from './accountGroupRatioStore.js';
+import { retryRemoteOperation } from './remoteRetry.js';
 
 const API_TOKEN_DISCOVERY_TIMEOUT_MS = 8_000;
 const MODEL_DISCOVERY_TIMEOUT_MS = 12_000;
+const MODEL_DISCOVERY_RETRY_ATTEMPTS = 3;
 const MODEL_REFRESH_BATCH_SIZE = 3;
 const GEMINI_CLI_STATIC_MODELS = [
   'gemini-2.5-pro',
@@ -351,10 +353,15 @@ async function retryOauthModelDiscoveryWithRefresh<T>(input: {
   attempt: (account: ModelDiscoveryAccountRow) => Promise<T>;
 }): Promise<{ result: T; account: ModelDiscoveryAccountRow }> {
   let discoveryAccount = input.account;
+  const runDiscoveryAttempt = (candidateAccount: ModelDiscoveryAccountRow) => retryRemoteOperation({
+    label: `oauth-model-discovery:${candidateAccount.id}`,
+    attempts: MODEL_DISCOVERY_RETRY_ATTEMPTS,
+    run: () => input.attempt(candidateAccount),
+  });
 
   try {
     return {
-      result: await input.attempt(discoveryAccount),
+      result: await runDiscoveryAttempt(discoveryAccount),
       account: discoveryAccount,
     };
   } catch (error) {
@@ -373,7 +380,7 @@ async function retryOauthModelDiscoveryWithRefresh<T>(input: {
     discoveryAccount = refreshedAccount;
     try {
       return {
-        result: await input.attempt(discoveryAccount),
+        result: await runDiscoveryAttempt(discoveryAccount),
         account: discoveryAccount,
       };
     } catch (retryError) {
@@ -879,12 +886,16 @@ export async function refreshModelsForAccount(
     let discoveryAccount = account;
     try {
       try {
-        await withTimeout(
-          () => withAccountProxyOverride(accountProxyUrl,
-            () => validateGeminiCliOauthConnection({ site, account: discoveryAccount })),
-          MODEL_DISCOVERY_TIMEOUT_MS,
-          `gemini cli oauth validation timeout (${Math.round(MODEL_DISCOVERY_TIMEOUT_MS / 1000)}s)`,
-        );
+        await retryRemoteOperation({
+          label: `gemini-cli-oauth-validation:${discoveryAccount.id}`,
+          attempts: MODEL_DISCOVERY_RETRY_ATTEMPTS,
+          run: () => withTimeout(
+            () => withAccountProxyOverride(accountProxyUrl,
+              () => validateGeminiCliOauthConnection({ site, account: discoveryAccount })),
+            MODEL_DISCOVERY_TIMEOUT_MS,
+            `gemini cli oauth validation timeout (${Math.round(MODEL_DISCOVERY_TIMEOUT_MS / 1000)}s)`,
+          ),
+        });
       } catch (error) {
         if (!shouldRetryModelDiscoveryWithOauthRefresh(error)) {
           throw error;
@@ -898,12 +909,16 @@ export async function refreshModelsForAccount(
           accessToken: refreshed.accessToken,
           extraConfig: refreshed.extraConfig,
         };
-        await withTimeout(
-          () => withAccountProxyOverride(accountProxyUrl,
-            () => validateGeminiCliOauthConnection({ site, account: discoveryAccount })),
-          MODEL_DISCOVERY_TIMEOUT_MS,
-          `gemini cli oauth validation timeout (${Math.round(MODEL_DISCOVERY_TIMEOUT_MS / 1000)}s)`,
-        );
+        await retryRemoteOperation({
+          label: `gemini-cli-oauth-validation:${discoveryAccount.id}`,
+          attempts: MODEL_DISCOVERY_RETRY_ATTEMPTS,
+          run: () => withTimeout(
+            () => withAccountProxyOverride(accountProxyUrl,
+              () => validateGeminiCliOauthConnection({ site, account: discoveryAccount })),
+            MODEL_DISCOVERY_TIMEOUT_MS,
+            `gemini cli oauth validation timeout (${Math.round(MODEL_DISCOVERY_TIMEOUT_MS / 1000)}s)`,
+          ),
+        });
       }
       const newGeminiModels = GEMINI_CLI_STATIC_MODELS.filter((m) => !manualModelNames.has(m.toLowerCase()));
       if (newGeminiModels.length > 0) {
@@ -1068,12 +1083,16 @@ export async function refreshModelsForAccount(
 
   if (!account.apiToken && account.accessToken) {
     try {
-      discoveredApiToken = await withTimeout(
-        () => withAccountProxyOverride(accountProxyUrl,
-          () => adapter.getApiToken(site.url, account.accessToken, platformUserId)),
-        API_TOKEN_DISCOVERY_TIMEOUT_MS,
-        `api token discovery timeout (${Math.round(API_TOKEN_DISCOVERY_TIMEOUT_MS / 1000)}s)`,
-      );
+      discoveredApiToken = await retryRemoteOperation({
+        label: `api-token-discovery:${account.id}`,
+        attempts: MODEL_DISCOVERY_RETRY_ATTEMPTS,
+        run: () => withTimeout(
+          () => withAccountProxyOverride(accountProxyUrl,
+            () => adapter.getApiToken(site.url, account.accessToken, platformUserId)),
+          API_TOKEN_DISCOVERY_TIMEOUT_MS,
+          `api token discovery timeout (${Math.round(API_TOKEN_DISCOVERY_TIMEOUT_MS / 1000)}s)`,
+        ),
+      });
       if (discoveredApiToken && !isMaskedTokenValue(discoveredApiToken)) {
         await ensureDefaultTokenForAccount(account.id, discoveredApiToken, { name: 'default', source: 'sync' });
         await db.update(schema.accounts).set({
@@ -1176,12 +1195,16 @@ export async function refreshModelsForAccount(
     let models: string[] = [];
     try {
       models = normalizeModels(
-        await withTimeout(
-          () => withAccountProxyOverride(accountProxyUrl,
-            () => adapter.getModels(aiBaseUrl, credential, platformUserId)),
-          MODEL_DISCOVERY_TIMEOUT_MS,
-          `model discovery timeout (${Math.round(MODEL_DISCOVERY_TIMEOUT_MS / 1000)}s)`,
-        ),
+        await retryRemoteOperation({
+          label: `model-discovery:${account.id}`,
+          attempts: MODEL_DISCOVERY_RETRY_ATTEMPTS,
+          run: () => withTimeout(
+            () => withAccountProxyOverride(accountProxyUrl,
+              () => adapter.getModels(aiBaseUrl, credential, platformUserId)),
+            MODEL_DISCOVERY_TIMEOUT_MS,
+            `model discovery timeout (${Math.round(MODEL_DISCOVERY_TIMEOUT_MS / 1000)}s)`,
+          ),
+        }),
       );
     } catch (err) {
       recordFailure(err);
@@ -1204,12 +1227,16 @@ export async function refreshModelsForAccount(
 
     try {
       models = normalizeModels(
-        await withTimeout(
-          () => withAccountProxyOverride(accountProxyUrl,
-            () => adapter.getModels(aiBaseUrl, token.token, platformUserId)),
-          MODEL_DISCOVERY_TIMEOUT_MS,
-          `model discovery timeout (${Math.round(MODEL_DISCOVERY_TIMEOUT_MS / 1000)}s)`,
-        ),
+        await retryRemoteOperation({
+          label: `token-model-discovery:${token.id}`,
+          attempts: MODEL_DISCOVERY_RETRY_ATTEMPTS,
+          run: () => withTimeout(
+            () => withAccountProxyOverride(accountProxyUrl,
+              () => adapter.getModels(aiBaseUrl, token.token, platformUserId)),
+            MODEL_DISCOVERY_TIMEOUT_MS,
+            `model discovery timeout (${Math.round(MODEL_DISCOVERY_TIMEOUT_MS / 1000)}s)`,
+          ),
+        }),
       );
     } catch (err) {
       recordFailure(err);

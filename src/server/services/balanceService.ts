@@ -22,6 +22,9 @@ import {
   isSub2ApiPlatform,
 } from './sub2apiManagedAuth.js';
 import { refreshSub2ApiManagedSessionSingleflight } from './sub2apiRefreshSingleflight.js';
+import { retryRemoteOperation } from './remoteRetry.js';
+
+const BALANCE_REFRESH_RETRY_ATTEMPTS = 3;
 
 function isSiteDisabled(status?: string | null): boolean {
   return (status || 'active') === 'disabled';
@@ -238,7 +241,7 @@ async function tryAutoRelogin(account: any, site: any): Promise<string | null> {
 
 export async function refreshBalance(
   accountId: number,
-  options: { updateRuntimeHealthOnFailure?: boolean } = {},
+  options: { updateRuntimeHealthOnFailure?: boolean; retryAttempts?: number } = {},
 ) {
   const updateRuntimeHealthOnFailure = options.updateRuntimeHealthOnFailure !== false;
   const rows = await db
@@ -303,8 +306,12 @@ export async function refreshBalance(
       } catch {}
     }
   }
-  const readBalance = async (token: string) => withAccountProxyOverride(accountProxyUrl,
-    () => adapter.getBalance(site.url, token, platformUserId));
+  const readBalance = async (token: string) => retryRemoteOperation({
+    label: `balance:${accountId}`,
+    attempts: options.retryAttempts ?? BALANCE_REFRESH_RETRY_ATTEMPTS,
+    run: () => withAccountProxyOverride(accountProxyUrl,
+      () => adapter.getBalance(site.url, token, platformUserId)),
+  });
   const handleBalanceError = async (err: any) => {
     const message = appendSessionTokenRebindHint(err?.message || 'unknown error');
     if (updateRuntimeHealthOnFailure) {

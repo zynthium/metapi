@@ -157,7 +157,7 @@ describe('probeRuntimeModel', () => {
 
   it('marks temporary upstream failures as retryable probe results', async () => {
     resolveUpstreamEndpointCandidatesMock.mockResolvedValue(['chat']);
-    dispatchRuntimeRequestMock.mockResolvedValue(new Response('temporary unavailable', { status: 503 }));
+    dispatchRuntimeRequestMock.mockImplementation(async () => new Response('temporary unavailable', { status: 503 }));
 
     const { probeRuntimeModel } = await import('./runtimeModelProbe.js');
     const result = await probeRuntimeModel({
@@ -170,6 +170,72 @@ describe('probeRuntimeModel', () => {
     expect(result.status).toBe('inconclusive');
     expect(result.retryable).toBe(true);
     expect(result.reason).toContain('temporary unavailable');
+    expect(dispatchRuntimeRequestMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('retries retryable probe failures before returning an inconclusive result', async () => {
+    resolveUpstreamEndpointCandidatesMock.mockResolvedValue(['chat']);
+    dispatchRuntimeRequestMock
+      .mockResolvedValueOnce(new Response('temporary unavailable', { status: 503 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    const { probeRuntimeModel } = await import('./runtimeModelProbe.js');
+    const result = await probeRuntimeModel({
+      site,
+      account,
+      modelName: 'gpt-5.4',
+      timeoutMs: 1000,
+    });
+
+    expect(result.status).toBe('supported');
+    expect(result.retryable).toBe(false);
+    expect(dispatchRuntimeRequestMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries token-health 403 probe failures within the configured retry budget', async () => {
+    resolveUpstreamEndpointCandidatesMock.mockResolvedValue(['chat']);
+    dispatchRuntimeRequestMock
+      .mockResolvedValueOnce(new Response('model access denied by permission policy', { status: 403 }))
+      .mockResolvedValueOnce(new Response('model access denied by permission policy', { status: 403 }))
+      .mockResolvedValueOnce(new Response('model access denied by permission policy', { status: 403 }))
+      .mockResolvedValueOnce(new Response('model access denied by permission policy', { status: 403 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    const { probeRuntimeModel } = await import('./runtimeModelProbe.js');
+    const result = await probeRuntimeModel({
+      site,
+      account,
+      modelName: 'gpt-5.4',
+      timeoutMs: 1000,
+      tokenValue: 'sk-token-health',
+      probeKind: 'token-health',
+      retryAttempts: 5,
+    });
+
+    expect(result.status).toBe('supported');
+    expect(result.retryable).toBe(false);
+    expect(dispatchRuntimeRequestMock).toHaveBeenCalledTimes(5);
+  });
+
+  it('retries model-availability 403 probe failures within the configured retry budget', async () => {
+    resolveUpstreamEndpointCandidatesMock.mockResolvedValue(['chat']);
+    dispatchRuntimeRequestMock
+      .mockResolvedValueOnce(new Response('model access denied by permission policy', { status: 403 }))
+      .mockResolvedValueOnce(new Response('model access denied by permission policy', { status: 403 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    const { probeRuntimeModel } = await import('./runtimeModelProbe.js');
+    const result = await probeRuntimeModel({
+      site,
+      account,
+      modelName: 'gpt-5.4',
+      timeoutMs: 1000,
+      retryAttempts: 3,
+    });
+
+    expect(result.status).toBe('supported');
+    expect(result.retryable).toBe(false);
+    expect(dispatchRuntimeRequestMock).toHaveBeenCalledTimes(3);
   });
 
   it('does not immediately retry quota exhaustion probe results', async () => {

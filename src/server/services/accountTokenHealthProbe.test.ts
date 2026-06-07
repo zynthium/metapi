@@ -19,6 +19,7 @@ describe('account token health probe', () => {
   let db: DbModule['db'];
   let schema: DbModule['schema'];
   let health: HealthModule;
+  let config: typeof import('../config.js').config;
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'metapi-token-health-probe-'));
@@ -26,6 +27,7 @@ describe('account token health probe', () => {
     process.env.DATA_DIR = dataDir;
 
     await import('../db/migrate.js');
+    config = (await import('../config.js')).config;
     const dbModule = await import('../db/index.js');
     health = await import('./accountTokenHealthService.js');
     db = dbModule.db;
@@ -33,6 +35,7 @@ describe('account token health probe', () => {
   });
 
   beforeEach(async () => {
+    config.connectionMaintenanceRetryAttempts = 5;
     probeRuntimeModelMock.mockReset();
     probeRuntimeModelMock.mockResolvedValue({
       status: 'supported',
@@ -190,6 +193,7 @@ describe('account token health probe', () => {
       modelName: 'site-probe-model',
       tokenValue: 'sk-ready-never',
       probeKind: 'token-health',
+      retryAttempts: 5,
     }));
     const row = await db.select()
       .from(schema.accountTokenHealth)
@@ -204,20 +208,14 @@ describe('account token health probe', () => {
     });
   });
 
-  it('retries retryable token probes and enforces a stable timeout floor', async () => {
+  it('delegates retryable token probe retry budget to the runtime model probe', async () => {
     const { readyNever } = await seedAccountWithTokens();
-    probeRuntimeModelMock
-      .mockResolvedValueOnce({
-        status: 'inconclusive',
-        latencyMs: 15_000,
-        reason: 'runtime model probe timeout (15s)',
-        retryable: true,
-      })
-      .mockResolvedValueOnce({
-        status: 'supported',
-        latencyMs: 16,
-        reason: 'probe succeeded',
-      });
+    probeRuntimeModelMock.mockResolvedValue({
+      status: 'inconclusive',
+      latencyMs: 15_000,
+      reason: 'runtime model probe timeout (15s)',
+      retryable: true,
+    });
 
     const result = await health.probeAccountTokenHealth({
       tokenId: readyNever.id,
@@ -228,13 +226,11 @@ describe('account token health probe', () => {
       backoffMs: () => 0,
     });
 
-    expect(result.status).toBe('healthy');
-    expect(probeRuntimeModelMock).toHaveBeenCalledTimes(2);
-    expect(probeRuntimeModelMock).toHaveBeenNthCalledWith(1, expect.objectContaining({
+    expect(result.status).toBe('request_failed_pending_probe');
+    expect(probeRuntimeModelMock).toHaveBeenCalledTimes(1);
+    expect(probeRuntimeModelMock).toHaveBeenCalledWith(expect.objectContaining({
       timeoutMs: 15_000,
-    }));
-    expect(probeRuntimeModelMock).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      timeoutMs: 15_000,
+      retryAttempts: 3,
     }));
   });
 

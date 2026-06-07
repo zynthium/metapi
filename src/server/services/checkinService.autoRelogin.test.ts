@@ -9,6 +9,7 @@ const notifyMock = vi.fn();
 const reportTokenExpiredMock = vi.fn();
 const refreshBalanceMock = vi.fn();
 const decryptPasswordMock = vi.fn();
+const setAccountRuntimeHealthMock = vi.fn();
 
 const selectAllMock = vi.fn();
 const insertValuesMock = vi.fn();
@@ -78,6 +79,10 @@ vi.mock('./accountCredentialService.js', () => ({
   decryptAccountPassword: (...args: unknown[]) => decryptPasswordMock(...args),
 }));
 
+vi.mock('./accountHealthService.js', () => ({
+  setAccountRuntimeHealth: (...args: unknown[]) => setAccountRuntimeHealthMock(...args),
+}));
+
 describe('checkinService auto relogin', () => {
   beforeEach(() => {
     adapterMock.checkin.mockReset();
@@ -86,6 +91,7 @@ describe('checkinService auto relogin', () => {
     reportTokenExpiredMock.mockReset();
     refreshBalanceMock.mockReset();
     decryptPasswordMock.mockReset();
+    setAccountRuntimeHealthMock.mockReset();
     selectAllMock.mockReset();
     insertValuesMock.mockReset();
     updateSetMock.mockReset();
@@ -156,6 +162,41 @@ describe('checkinService auto relogin', () => {
 
     expect(adapterMock.checkin).toHaveBeenCalledTimes(1);
     expect(adapterMock.checkin.mock.calls[0][2]).toBe(11494);
+  });
+
+  it('retries transient checkin failures before marking the account unhealthy', async () => {
+    selectAllMock.mockReturnValue([
+      {
+        accounts: {
+          id: 21,
+          username: 'retry-checkin-user',
+          accessToken: 'token',
+          status: 'active',
+          extraConfig: null,
+        },
+        sites: {
+          id: 21,
+          name: 'demo',
+          url: 'https://example.com',
+          platform: 'new-api',
+        },
+      },
+    ]);
+
+    adapterMock.checkin
+      .mockResolvedValueOnce({ success: false, message: 'HTTP 503: service unavailable' })
+      .mockResolvedValueOnce({ success: true, message: 'checked in' });
+    refreshBalanceMock.mockResolvedValue({ balance: 10, used: 1, quota: 11 });
+
+    const { checkinAccount } = await import('./checkinService.js');
+    const result = await checkinAccount(21);
+
+    expect(result.success).toBe(true);
+    expect(adapterMock.checkin).toHaveBeenCalledTimes(2);
+    expect(setAccountRuntimeHealthMock).not.toHaveBeenCalledWith(21, expect.objectContaining({
+      state: 'unhealthy',
+    }));
+    expect(reportTokenExpiredMock).not.toHaveBeenCalled();
   });
 
   it('keeps successful checkin as success when message is 签到成功', async () => {

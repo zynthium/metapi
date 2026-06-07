@@ -172,6 +172,40 @@ describe('balanceService auto relogin', () => {
     expect(reportTokenExpiredMock).toHaveBeenCalledTimes(1);
   });
 
+  it('retries transient balance failures before marking the account unhealthy', async () => {
+    selectAllMock.mockReturnValue([
+      {
+        accounts: {
+          id: 21,
+          username: 'temporary-balance-user',
+          accessToken: 'session-token',
+          status: 'active',
+          extraConfig: null,
+        },
+        sites: {
+          id: 21,
+          name: 'temporary-site',
+          url: 'https://temporary.example.com',
+          platform: 'new-api',
+        },
+      },
+    ]);
+
+    adapterMock.getBalance
+      .mockRejectedValueOnce(new Error('fetch failed'))
+      .mockResolvedValueOnce({ balance: 7, used: 2, quota: 9 });
+
+    const { refreshBalance } = await import('./balanceService.js');
+    const result = await refreshBalance(21);
+
+    expect(result).toEqual({ balance: 7, used: 2, quota: 9 });
+    expect(adapterMock.getBalance).toHaveBeenCalledTimes(2);
+    expect(setAccountRuntimeHealthMock).not.toHaveBeenCalledWith(21, expect.objectContaining({
+      state: 'unhealthy',
+    }));
+    expect(reportTokenExpiredMock).not.toHaveBeenCalled();
+  });
+
   it('does not report token expired for generic forbidden balance errors', async () => {
     selectAllMock.mockReturnValue([
       {
