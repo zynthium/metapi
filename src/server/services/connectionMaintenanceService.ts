@@ -90,6 +90,8 @@ async function execute(config: ConnectionMaintenanceConfig): Promise<ConnectionM
   if (config.stages.tokenHealth) {
     stages.tokenHealth = await executeAccountTokenHealthProbeSweep({
       concurrency: config.concurrency,
+      retryAttempts: config.retryAttempts,
+      timeoutMs: attemptTimeoutMs,
     });
   }
 

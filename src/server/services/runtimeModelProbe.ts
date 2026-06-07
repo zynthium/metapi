@@ -16,6 +16,7 @@ export type RuntimeModelProbeResult = {
   status: RuntimeModelProbeStatus;
   latencyMs: number | null;
   reason: string;
+  retryable?: boolean;
 };
 
 const NON_CONVERSATION_MODEL_PATTERNS = [
@@ -44,6 +45,36 @@ const DEFINITE_UNSUPPORTED_PATTERNS = [
   /模型[^]{0,40}(无权限|未授权|禁止访问)/,
 ];
 
+const NON_RETRYABLE_QUOTA_PATTERNS = [
+  /insufficient[_\s-]?quota/i,
+  /exceeded your current quota/i,
+  /out of credits/i,
+  /credit balance/i,
+  /billing details/i,
+  /余额不足/,
+  /额度不足/,
+  /额度已用完/,
+  /余额已用完/,
+];
+
+const RETRYABLE_TEXT_PATTERNS = [
+  /timeout/i,
+  /timed out/i,
+  /temporar(y|ily)/i,
+  /connection reset/i,
+  /socket hang up/i,
+  /econnreset/i,
+  /etimedout/i,
+  /econnrefused/i,
+  /rate limit/i,
+  /too many requests/i,
+  /try again/i,
+  /temporarily unavailable/i,
+  /临时/,
+  /超时/,
+  /稍后重试/,
+];
+
 function isLikelyConversationModel(modelName: string): boolean {
   const normalized = String(modelName || '').trim();
   if (!normalized) return false;
@@ -56,6 +87,21 @@ function classifyUnsupportedFailure(status: number, rawErrorText: string): boole
   const normalized = String(rawErrorText || '').trim();
   if (!normalized) return false;
   return DEFINITE_UNSUPPORTED_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function isQuotaExhaustedFailure(rawErrorText: string): boolean {
+  const normalized = String(rawErrorText || '').trim();
+  return normalized.length > 0 && NON_RETRYABLE_QUOTA_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function isRetryableFailure(status: number, rawErrorText: string): boolean {
+  if (isQuotaExhaustedFailure(rawErrorText)) return false;
+  if (classifyUnsupportedFailure(status, rawErrorText)) return false;
+  if ([401, 403, 404, 422].includes(status)) return false;
+  if ([408, 409, 425, 429, 500, 502, 503, 504, 520, 522, 524].includes(status)) return true;
+  if (status <= 0) return true;
+  const normalized = String(rawErrorText || '').trim();
+  return normalized.length > 0 && RETRYABLE_TEXT_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
 export type RuntimeModelProbeKind = 'model-availability' | 'token-health';
@@ -124,6 +170,7 @@ export async function probeRuntimeModel(input: {
       status: 'skipped',
       latencyMs: null,
       reason: 'skipped non-conversation model probe',
+      retryable: false,
     };
   }
 
@@ -138,6 +185,7 @@ export async function probeRuntimeModel(input: {
       status: 'inconclusive',
       latencyMs: null,
       reason: 'missing credential for probe',
+      retryable: false,
     };
   }
 
@@ -165,6 +213,7 @@ export async function probeRuntimeModel(input: {
         status: 'inconclusive',
         latencyMs: Date.now() - startedAt,
         reason: 'no compatible probe endpoint candidates',
+        retryable: false,
       };
     }
 
@@ -248,20 +297,25 @@ export async function probeRuntimeModel(input: {
         status: 'supported',
         latencyMs,
         reason: 'probe succeeded',
+        retryable: false,
       };
     }
 
     const rawErrorText = String(result.rawErrText || result.errText || '').trim();
+    const status = result.status || 0;
+    const unsupported = classifyUnsupportedFailure(status, rawErrorText);
     return {
-      status: classifyUnsupportedFailure(result.status || 0, rawErrorText) ? 'unsupported' : 'inconclusive',
+      status: unsupported ? 'unsupported' : 'inconclusive',
       latencyMs,
-      reason: rawErrorText || `probe failed with status ${result.status || 0}`,
+      reason: rawErrorText || `probe failed with status ${status}`,
+      retryable: !unsupported && isRetryableFailure(status, rawErrorText),
     };
   } catch (error) {
     return {
       status: 'inconclusive',
       latencyMs: Date.now() - startedAt,
       reason: error instanceof Error ? error.message : 'probe failed',
+      retryable: true,
     };
   }
 }

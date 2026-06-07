@@ -949,6 +949,51 @@ describe('account tokens sync routes with site status', () => {
     ]);
   });
 
+  it('returns token-level available models for probe model selection', async () => {
+    const { account } = await seedAccount({ siteStatus: 'active' });
+    const token = await db.insert(schema.accountTokens).values({
+      accountId: account.id,
+      name: 'probe-model-options-token',
+      token: 'sk-probe-model-options-token',
+      source: 'manual',
+      enabled: true,
+      isDefault: false,
+    }).returning().get();
+    await db.insert(schema.tokenModelAvailability).values([
+      {
+        tokenId: token.id,
+        modelName: 'gpt-5-mini',
+        available: true,
+        latencyMs: 12,
+      },
+      {
+        tokenId: token.id,
+        modelName: 'gpt-5',
+        available: true,
+        latencyMs: 20,
+      },
+      {
+        tokenId: token.id,
+        modelName: 'gpt-5-disabled',
+        available: false,
+        latencyMs: 30,
+      },
+    ]).run();
+
+    const listResponse = await app.inject({
+      method: 'GET',
+      url: `/api/account-tokens?accountId=${account.id}`,
+    });
+
+    expect(listResponse.statusCode).toBe(200);
+    expect(listResponse.json()).toEqual([
+      expect.objectContaining({
+        id: token.id,
+        availableModels: ['gpt-5', 'gpt-5-mini'],
+      }),
+    ]);
+  });
+
   it('updates the token probe model override', async () => {
     const { account } = await seedAccount({ siteStatus: 'active' });
     const token = await db.insert(schema.accountTokens).values({

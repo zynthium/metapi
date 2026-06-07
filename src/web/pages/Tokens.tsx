@@ -394,6 +394,18 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
       };
     })
   ), [activeAccounts]);
+  const tokenProbeModelOptions = useMemo(() => {
+    const models = Array.isArray(editingToken?.availableModels)
+      ? editingToken.availableModels.map((item: unknown) => String(item || '').trim()).filter(Boolean)
+      : [];
+    const current = editForm.probeModel.trim();
+    const normalized: string[] = Array.from(new Set<string>(current ? [...models, current] : models));
+    return normalized.map((model) => ({
+      value: model,
+      label: model,
+      description: current && model === current && !models.includes(model) ? '当前自定义值' : undefined,
+    }));
+  }, [editForm.probeModel, editingToken?.availableModels]);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -1144,13 +1156,20 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
                   </div>
                 </label>
               </div>
-              <input
-                placeholder="例如 gpt-5-mini"
+              <ModernSelect
+                data-testid="token-probe-model-select"
                 value={editForm.probeModel}
-                onChange={(e) => setEditForm((prev) => ({ ...prev, probeModel: e.target.value }))}
-                disabled={editForm.probeModelMode !== 'custom'}
-                style={inputStyle}
+                onChange={(value) => setEditForm((prev) => ({ ...prev, probeModel: value }))}
+                options={tokenProbeModelOptions}
+                placeholder={tokenProbeModelOptions.length > 0 ? '选择探测模型' : '暂无可选模型'}
+                emptyLabel="该令牌暂无可用模型"
+                disabled={editForm.probeModelMode !== 'custom' || tokenProbeModelOptions.length === 0}
+                searchable
+                searchPlaceholder="筛选模型"
               />
+              <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+                模型选项来自当前令牌/API Key 的可用模型探测结果。
+              </div>
             </div>
           </>
         ) : null}

@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { db, schema } from '../db/index.js';
 import {
   probeRuntimeModel,
+  type RuntimeModelProbeResult,
   type RuntimeModelProbeStatus,
 } from './runtimeModelProbe.js';
 
@@ -13,6 +14,8 @@ type SiteRow = typeof schema.sites.$inferSelect;
 
 const DEFAULT_TOKEN_HEALTH_STALE_AFTER_MS = 6 * 60 * 60 * 1000;
 const TOKEN_HEALTH_FAILURE_THRESHOLD = 5;
+const TOKEN_HEALTH_PROBE_MIN_TIMEOUT_MS = 15_000;
+const DEFAULT_TOKEN_HEALTH_PROBE_RETRY_ATTEMPTS = 3;
 
 export type AccountTokenHealthStatus =
   | 'healthy'
@@ -88,6 +91,32 @@ function truncateError(value: string | null | undefined): string | null {
   const normalized = normalizeOptionalText(value);
   if (!normalized) return null;
   return normalized.length > 500 ? normalized.slice(0, 500) : normalized;
+}
+
+async function sleep(ms: number): Promise<void> {
+  if (ms <= 0) return;
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function resolveTokenHealthProbeTimeoutMs(input?: number): number {
+  const configuredTokenTimeout = Number((config as unknown as { tokenHealthProbeTimeoutMs?: number }).tokenHealthProbeTimeoutMs);
+  const configuredModelTimeout = Number(config.modelAvailabilityProbeTimeoutMs);
+  const raw = Number.isFinite(input)
+    ? Number(input)
+    : (Number.isFinite(configuredTokenTimeout) ? configuredTokenTimeout : configuredModelTimeout);
+  return Math.max(TOKEN_HEALTH_PROBE_MIN_TIMEOUT_MS, Math.trunc(raw || TOKEN_HEALTH_PROBE_MIN_TIMEOUT_MS));
+}
+
+function resolveTokenHealthProbeRetryAttempts(input?: number): number {
+  const configured = Number(config.connectionMaintenanceRetryAttempts);
+  const raw = Number.isFinite(input)
+    ? Number(input)
+    : (Number.isFinite(configured) ? configured : DEFAULT_TOKEN_HEALTH_PROBE_RETRY_ATTEMPTS);
+  return Math.max(1, Math.min(10, Math.trunc(raw || DEFAULT_TOKEN_HEALTH_PROBE_RETRY_ATTEMPTS)));
+}
+
+function defaultTokenHealthProbeBackoffMs(attempt: number): number {
+  return Math.min(500 * (2 ** Math.max(0, attempt - 1)), 5_000);
 }
 
 function nowIso(): string {
@@ -445,11 +474,43 @@ async function loadAccountTokenProbeTargetById(input: {
   };
 }
 
+async function probeRuntimeModelForAccountTokenHealth(input: {
+  target: AccountTokenHealthProbeTarget;
+  timeoutMs: number;
+  retryAttempts: number;
+  backoffMs?: (attempt: number) => number;
+}): Promise<RuntimeModelProbeResult> {
+  let lastProbe: RuntimeModelProbeResult | null = null;
+  for (let attempt = 1; attempt <= input.retryAttempts; attempt += 1) {
+    const probe = await probeRuntimeModel({
+      site: input.target.site,
+      account: input.target.account,
+      modelName: input.target.probeModel,
+      timeoutMs: input.timeoutMs,
+      tokenValue: input.target.tokenValue,
+      probeKind: 'token-health',
+    });
+    lastProbe = probe;
+    if (probe.status === 'supported' || probe.status === 'skipped') return probe;
+    if (probe.retryable !== true || attempt >= input.retryAttempts) return probe;
+    await sleep(input.backoffMs?.(attempt) ?? defaultTokenHealthProbeBackoffMs(attempt));
+  }
+
+  return lastProbe ?? {
+    status: 'inconclusive',
+    latencyMs: null,
+    reason: 'probe failed before execution',
+    retryable: false,
+  };
+}
+
 export async function probeAccountTokenHealth(input: {
   tokenId: number | null | undefined;
   scheduled?: boolean;
   nowMs?: number;
   timeoutMs?: number;
+  retryAttempts?: number;
+  backoffMs?: (attempt: number) => number;
   globalProbeModel?: string | null;
 }): Promise<AccountTokenHealthProbeResult> {
   const tokenId = Number(input.tokenId);
@@ -490,13 +551,11 @@ export async function probeAccountTokenHealth(input: {
     };
   }
 
-  const probe = await probeRuntimeModel({
-    site: target.site,
-    account: target.account,
-    modelName: target.probeModel,
-    timeoutMs: Math.max(3_000, Math.trunc(input.timeoutMs || config.modelAvailabilityProbeTimeoutMs)),
-    tokenValue: target.tokenValue,
-    probeKind: 'token-health',
+  const probe = await probeRuntimeModelForAccountTokenHealth({
+    target,
+    timeoutMs: resolveTokenHealthProbeTimeoutMs(input.timeoutMs),
+    retryAttempts: resolveTokenHealthProbeRetryAttempts(input.retryAttempts),
+    backoffMs: input.backoffMs,
   });
 
   if (probe.status === 'supported') {
@@ -565,6 +624,9 @@ export async function executeAccountTokenHealthProbeSweep(input: {
   limit?: number;
   nowMs?: number;
   staleAfterMs?: number;
+  timeoutMs?: number;
+  retryAttempts?: number;
+  backoffMs?: (attempt: number) => number;
   globalProbeModel?: string | null;
 } = {}): Promise<AccountTokenHealthProbeSweepResult> {
   const nowMs = Number.isFinite(input.nowMs as number) ? Math.trunc(input.nowMs as number) : Date.now();
@@ -581,6 +643,9 @@ export async function executeAccountTokenHealthProbeSweep(input: {
       tokenId: target.tokenId,
       scheduled: true,
       nowMs,
+      timeoutMs: input.timeoutMs,
+      retryAttempts: input.retryAttempts,
+      backoffMs: input.backoffMs,
       globalProbeModel: input.globalProbeModel,
     }),
   );

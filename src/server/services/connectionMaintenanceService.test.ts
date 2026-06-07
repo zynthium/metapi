@@ -71,7 +71,11 @@ describe('connectionMaintenanceService', () => {
     expect(syncAllTokensMock.mock.invocationCallOrder[0]).toBeLessThan(refreshGroupRatiosMock.mock.invocationCallOrder[0]);
     expect(refreshGroupRatiosMock.mock.invocationCallOrder[0]).toBeLessThan(tokenHealthProbeMock.mock.invocationCallOrder[0]);
     expect(tokenHealthProbeMock.mock.invocationCallOrder[0]).toBeLessThan(refreshRoutesMock.mock.invocationCallOrder[0]);
-    expect(tokenHealthProbeMock).toHaveBeenCalledWith({ concurrency: 3 });
+    expect(tokenHealthProbeMock).toHaveBeenCalledWith({
+      concurrency: 3,
+      retryAttempts: 5,
+      timeoutMs: 15_000,
+    });
     expect(refreshRoutesMock.mock.invocationCallOrder[0]).toBeLessThan(refreshSnapshotsMock.mock.invocationCallOrder[0]);
     expect(getAccountsSnapshotMock).toHaveBeenCalledWith({ forceRefresh: true });
   });

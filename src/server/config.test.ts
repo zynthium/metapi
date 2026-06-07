@@ -70,10 +70,12 @@ describe('buildConfig', () => {
     const config = buildConfig({
       TOKEN_HEALTH_PROBE_MODEL: ' gpt-5-mini ',
       TOKEN_HEALTH_STALE_HOURS: '12',
+      TOKEN_HEALTH_PROBE_TIMEOUT_MS: '3000',
     });
 
     expect(config.tokenHealthProbeModel).toBe('gpt-5-mini');
     expect(config.tokenHealthStaleHours).toBe(12);
+    expect(config.tokenHealthProbeTimeoutMs).toBe(15_000);
   });
 
   it('accepts JSON request bodies larger than Fastify default 1 MiB', async () => {

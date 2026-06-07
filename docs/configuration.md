@@ -203,11 +203,13 @@ Metapi 当前有三类主要配置入口：
 | `MODEL_AVAILABILITY_PROBE_INTERVAL_MS` | 批量测活间隔（毫秒） | `1800000` |
 | `MODEL_AVAILABILITY_PROBE_TIMEOUT_MS` | 批量测活单次探测超时（毫秒） | `15000` |
 | `MODEL_AVAILABILITY_PROBE_CONCURRENCY` | 批量测活并发数 | `1` |
+| `TOKEN_HEALTH_PROBE_TIMEOUT_MS` | 令牌健康探测单次超时（毫秒，低于 15000 会自动抬到 15000） | `15000` |
 
 注意：
 
 - **批量测活开关本身**已经在 UI 里有了
 - 这里只剩下间隔、超时、并发这些更高级的细项还没有 UI
+- 令牌健康探测会继承连接维护的重试次数；超时下限固定为 15 秒，避免网络抖动造成误判
 
 ---
 

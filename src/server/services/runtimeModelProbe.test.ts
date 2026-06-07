@@ -89,6 +89,7 @@ describe('probeRuntimeModel', () => {
     expect(result.status).toBe('inconclusive');
     expect(result.reason).toContain('resolution failed');
     expect(result.latencyMs).not.toBeNull();
+    expect(result.retryable).toBe(true);
   });
 
   it('uses the remaining timeout budget for the runtime request phase', async () => {
@@ -152,5 +153,47 @@ describe('probeRuntimeModel', () => {
       },
       tokenValue: 'sk-token-health',
     }));
+  });
+
+  it('marks temporary upstream failures as retryable probe results', async () => {
+    resolveUpstreamEndpointCandidatesMock.mockResolvedValue(['chat']);
+    dispatchRuntimeRequestMock.mockResolvedValue(new Response('temporary unavailable', { status: 503 }));
+
+    const { probeRuntimeModel } = await import('./runtimeModelProbe.js');
+    const result = await probeRuntimeModel({
+      site,
+      account,
+      modelName: 'gpt-5.4',
+      timeoutMs: 1000,
+    });
+
+    expect(result.status).toBe('inconclusive');
+    expect(result.retryable).toBe(true);
+    expect(result.reason).toContain('temporary unavailable');
+  });
+
+  it('does not immediately retry quota exhaustion probe results', async () => {
+    resolveUpstreamEndpointCandidatesMock.mockResolvedValue(['chat']);
+    dispatchRuntimeRequestMock.mockResolvedValue(new Response(JSON.stringify({
+      error: {
+        code: 'insufficient_quota',
+        message: 'You exceeded your current quota, please check your plan and billing details.',
+      },
+    }), {
+      status: 429,
+      headers: { 'content-type': 'application/json' },
+    }));
+
+    const { probeRuntimeModel } = await import('./runtimeModelProbe.js');
+    const result = await probeRuntimeModel({
+      site,
+      account,
+      modelName: 'gpt-5.4',
+      timeoutMs: 1000,
+    });
+
+    expect(result.status).toBe('inconclusive');
+    expect(result.retryable).toBe(false);
+    expect(result.reason).toContain('insufficient_quota');
   });
 });

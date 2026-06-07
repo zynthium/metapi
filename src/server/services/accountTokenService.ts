@@ -575,6 +575,23 @@ export async function listTokensWithRelations(accountId?: number) {
   const healthByTokenId = new Map<number, AccountTokenHealthRow>(
     healthRows.map((row) => [row.tokenId, row]),
   );
+  const modelRows = tokenIds.length > 0
+    ? await db.select()
+      .from(schema.tokenModelAvailability)
+      .where(and(
+        inArray(schema.tokenModelAvailability.tokenId, tokenIds),
+        eq(schema.tokenModelAvailability.available, true),
+      ))
+      .all()
+    : [];
+  const availableModelsByTokenId = new Map<number, Set<string>>();
+  for (const row of modelRows) {
+    const modelName = row.modelName?.trim();
+    if (!modelName) continue;
+    const existing = availableModelsByTokenId.get(row.tokenId) || new Set<string>();
+    existing.add(modelName);
+    availableModelsByTokenId.set(row.tokenId, existing);
+  }
 
   return rows
     .filter((row) => !isApiKeyConnection(row.accounts))
@@ -594,6 +611,7 @@ export async function listTokensWithRelations(accountId?: number) {
         groupMultiplierRefreshedAt: ratio?.refreshedAt ?? null,
         groupMultiplierLastError: ratio?.lastError ?? null,
         groupMultiplierStale: !!ratio?.lastError,
+        availableModels: Array.from(availableModelsByTokenId.get(row.account_tokens.id) || []).sort((left, right) => left.localeCompare(right)),
         health: buildAccountTokenHealthSummary({
           token: row.account_tokens,
           accountStatus: row.accounts.status,

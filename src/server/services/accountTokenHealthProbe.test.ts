@@ -204,6 +204,70 @@ describe('account token health probe', () => {
     });
   });
 
+  it('retries retryable token probes and enforces a stable timeout floor', async () => {
+    const { readyNever } = await seedAccountWithTokens();
+    probeRuntimeModelMock
+      .mockResolvedValueOnce({
+        status: 'inconclusive',
+        latencyMs: 15_000,
+        reason: 'runtime model probe timeout (15s)',
+        retryable: true,
+      })
+      .mockResolvedValueOnce({
+        status: 'supported',
+        latencyMs: 16,
+        reason: 'probe succeeded',
+      });
+
+    const result = await health.probeAccountTokenHealth({
+      tokenId: readyNever.id,
+      nowMs: Date.parse('2026-06-07T06:00:00.000Z'),
+      scheduled: true,
+      timeoutMs: 3_000,
+      retryAttempts: 3,
+      backoffMs: () => 0,
+    });
+
+    expect(result.status).toBe('healthy');
+    expect(probeRuntimeModelMock).toHaveBeenCalledTimes(2);
+    expect(probeRuntimeModelMock).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      timeoutMs: 15_000,
+    }));
+    expect(probeRuntimeModelMock).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      timeoutMs: 15_000,
+    }));
+  });
+
+  it('does not immediately retry non-retryable quota or permission probe results', async () => {
+    const { readyNever } = await seedAccountWithTokens();
+    probeRuntimeModelMock.mockResolvedValue({
+      status: 'unsupported',
+      latencyMs: 21,
+      reason: 'model access denied by permission policy',
+      retryable: false,
+    });
+
+    const result = await health.probeAccountTokenHealth({
+      tokenId: readyNever.id,
+      nowMs: Date.parse('2026-06-07T06:00:00.000Z'),
+      scheduled: true,
+      retryAttempts: 5,
+      backoffMs: () => 0,
+    });
+
+    expect(result.status).toBe('request_failed_pending_probe');
+    expect(probeRuntimeModelMock).toHaveBeenCalledTimes(1);
+    const row = await db.select()
+      .from(schema.accountTokenHealth)
+      .where(eq(schema.accountTokenHealth.tokenId, readyNever.id))
+      .get();
+    expect(row).toMatchObject({
+      status: 'request_failed_pending_probe',
+      failureCount: 1,
+      nextProbeAt: '2026-06-07T06:00:00.000Z',
+    });
+  });
+
   it('requires five scheduled failures before marking a token probe failed', async () => {
     const { readyNever } = await seedAccountWithTokens();
     probeRuntimeModelMock.mockResolvedValue({

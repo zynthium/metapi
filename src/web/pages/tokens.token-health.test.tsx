@@ -85,6 +85,7 @@ describe('Tokens account token health UI', () => {
         tokenGroup: 'default',
         groupMultiplier: 1,
         probeModel: 'gpt-5-mini',
+        availableModels: ['gpt-5-mini', 'gpt-5'],
         updatedAt: '2026-06-07T00:00:00.000Z',
         account: { username: 'codex-user' },
         site: { name: 'newapi', url: 'https://newapi.example.com' },
@@ -186,12 +187,23 @@ describe('Tokens account token health UI', () => {
         customMode.props.onChange({ target: { checked: true } });
       });
 
-      const probeModelInput = root.root.find((node) => (
-        node.type === 'input'
-        && node.props.placeholder === '例如 gpt-5-mini'
+      const probeModelSelect = root.root.find((node) => (
+        node.props?.['data-testid'] === 'token-probe-model-select'
       ));
+      const selectTrigger = probeModelSelect
+        .findAll((node) => node.type === 'button')
+        .find((node) => String(node.props.className || '').includes('modern-select-trigger'));
+      expect(selectTrigger).toBeTruthy();
       await act(async () => {
-        probeModelInput.props.onChange({ target: { value: 'gpt-5' } });
+        selectTrigger!.props.onClick();
+      });
+
+      const gpt5Option = root.root
+        .findAll((node) => node.type === 'button')
+        .find((node) => collectText(node).includes('gpt-5') && !collectText(node).includes('gpt-5-mini'));
+      expect(gpt5Option).toBeTruthy();
+      await act(async () => {
+        gpt5Option!.props.onClick();
       });
 
       const saveButton = root.root

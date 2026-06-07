@@ -162,6 +162,10 @@ export function buildConfig(env: NodeJS.ProcessEnv) {
     modelAvailabilityProbeTimeoutMs: Math.max(3_000, Math.trunc(parseNumber(env.MODEL_AVAILABILITY_PROBE_TIMEOUT_MS, 15_000))),
     modelAvailabilityProbeConcurrency: Math.max(1, Math.min(16, Math.trunc(parseNumber(env.MODEL_AVAILABILITY_PROBE_CONCURRENCY, 1)))),
     tokenHealthProbeModel: parseOptionalSecret(env.TOKEN_HEALTH_PROBE_MODEL),
+    tokenHealthProbeTimeoutMs: Math.max(15_000, Math.trunc(parseNumber(
+      env.TOKEN_HEALTH_PROBE_TIMEOUT_MS,
+      parseNumber(env.MODEL_AVAILABILITY_PROBE_TIMEOUT_MS, 15_000),
+    ))),
     tokenHealthStaleHours: Math.max(1, Math.trunc(parseNumber(env.TOKEN_HEALTH_STALE_HOURS, 6))),
     proxyLogRetentionDays: Math.max(0, Math.trunc(parseNumber(env.PROXY_LOG_RETENTION_DAYS, 30))),
     proxyLogRetentionPruneIntervalMinutes: Math.max(1, Math.trunc(parseNumber(env.PROXY_LOG_RETENTION_PRUNE_INTERVAL_MINUTES, 30))),
