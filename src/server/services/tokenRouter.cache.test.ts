@@ -944,21 +944,41 @@ describe('TokenRouter runtime cache', () => {
     }).returning().get();
 
     const router = new TokenRouter();
-    await router.recordFailure(channel.id, {
-      status: 401,
-      errorText: 'invalid token',
-      modelName: 'gpt-5.4-mini',
-    });
+    for (let index = 0; index < 4; index += 1) {
+      await router.recordFailure(channel.id, {
+        status: 401,
+        errorText: `invalid token ${index + 1}`,
+        modelName: 'gpt-5.4-mini',
+      });
+    }
 
     let health = await db.select()
       .from(schema.accountTokenHealth)
       .where(eq(schema.accountTokenHealth.tokenId, token.id))
       .get();
     expect(health).toMatchObject({
+      status: 'pending_probe',
+      lastUsedModel: 'gpt-5.4-mini',
+      lastError: 'invalid token 4',
+      failureCount: 4,
+      nextProbeAt: null,
+    });
+
+    await router.recordFailure(channel.id, {
+      status: 401,
+      errorText: 'invalid token 5',
+      modelName: 'gpt-5.4-mini',
+    });
+
+    health = await db.select()
+      .from(schema.accountTokenHealth)
+      .where(eq(schema.accountTokenHealth.tokenId, token.id))
+      .get();
+    expect(health).toMatchObject({
       status: 'request_failed_pending_probe',
       lastUsedModel: 'gpt-5.4-mini',
-      lastError: 'invalid token',
-      failureCount: 1,
+      lastError: 'invalid token 5',
+      failureCount: 5,
     });
 
     await router.recordSuccess(channel.id, 120, 0.01, 'gpt-5.4-mini');

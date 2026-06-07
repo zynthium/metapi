@@ -143,22 +143,82 @@ describe('accountTokenHealthService', () => {
     });
   });
 
-  it('records proxy failure as pending retry without permanent unhealthy verdict', async () => {
+  it('requires five proxy failures before marking business failure pending probe', async () => {
     const { token } = await seedToken();
-    await health.recordAccountTokenRequestFailure({
-      tokenId: token.id,
-      modelName: 'gpt-5-mini',
-      error: 'HTTP 401 invalid token',
-      at: '2026-06-07T00:00:00.000Z',
-    });
+
+    for (let index = 0; index < 4; index += 1) {
+      await health.recordAccountTokenRequestFailure({
+        tokenId: token.id,
+        modelName: 'gpt-5-mini',
+        error: `HTTP 401 invalid token ${index + 1}`,
+        at: `2026-06-07T00:00:0${index}.000Z`,
+      });
+    }
 
     const row = await db.select()
       .from(schema.accountTokenHealth)
       .where(eq(schema.accountTokenHealth.tokenId, token.id))
       .get();
-    expect(row?.status).toBe('request_failed_pending_probe');
-    expect(row?.lastError).toBe('HTTP 401 invalid token');
-    expect(row?.failureCount).toBe(1);
-    expect(row?.nextProbeAt).toBe('2026-06-07T00:00:00.000Z');
+    expect(row?.status).toBe('pending_probe');
+    expect(row?.lastError).toBe('HTTP 401 invalid token 4');
+    expect(row?.failureCount).toBe(4);
+    expect(row?.nextProbeAt).toBeNull();
+
+    await health.recordAccountTokenRequestFailure({
+      tokenId: token.id,
+      modelName: 'gpt-5-mini',
+      error: 'HTTP 401 invalid token 5',
+      at: '2026-06-07T00:00:04.000Z',
+    });
+
+    const marked = await db.select()
+      .from(schema.accountTokenHealth)
+      .where(eq(schema.accountTokenHealth.tokenId, token.id))
+      .get();
+    expect(marked?.status).toBe('request_failed_pending_probe');
+    expect(marked?.lastError).toBe('HTTP 401 invalid token 5');
+    expect(marked?.failureCount).toBe(5);
+    expect(marked?.nextProbeAt).toBe('2026-06-07T00:00:04.000Z');
+  });
+
+  it('preserves a recent healthy token until the fifth proxy failure', async () => {
+    const { token } = await seedToken();
+    await health.recordAccountTokenRequestSuccess({
+      tokenId: token.id,
+      modelName: 'gpt-5-mini',
+      at: '2026-06-07T00:00:00.000Z',
+    });
+
+    for (let index = 0; index < 4; index += 1) {
+      await health.recordAccountTokenRequestFailure({
+        tokenId: token.id,
+        modelName: 'gpt-5-mini',
+        error: `temporary failure ${index + 1}`,
+        at: `2026-06-07T00:00:0${index + 1}.000Z`,
+      });
+    }
+
+    const row = await db.select()
+      .from(schema.accountTokenHealth)
+      .where(eq(schema.accountTokenHealth.tokenId, token.id))
+      .get();
+    expect(row?.status).toBe('healthy');
+    expect(row?.failureCount).toBe(4);
+    expect(row?.nextProbeAt).toBeNull();
+
+    await health.recordAccountTokenRequestFailure({
+      tokenId: token.id,
+      modelName: 'gpt-5-mini',
+      error: 'temporary failure 5',
+      at: '2026-06-07T00:00:05.000Z',
+    });
+
+    const marked = await db.select()
+      .from(schema.accountTokenHealth)
+      .where(eq(schema.accountTokenHealth.tokenId, token.id))
+      .get();
+    expect(marked?.status).toBe('request_failed_pending_probe');
+    expect(marked?.failureCount).toBe(5);
+    expect(marked?.nextProbeAt).toBe('2026-06-07T00:00:05.000Z');
   });
 });

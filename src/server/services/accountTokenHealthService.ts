@@ -400,13 +400,18 @@ export async function recordAccountTokenRequestFailure(input: {
     .from(schema.accountTokenHealth)
     .where(eq(schema.accountTokenHealth.tokenId, tokenId))
     .get();
+  const failureCount = Math.max(0, existing?.failureCount ?? 0) + 1;
+  const shouldMarkRequestFailed = failureCount >= TOKEN_HEALTH_FAILURE_THRESHOLD;
+  const status = shouldMarkRequestFailed
+    ? 'request_failed_pending_probe'
+    : (existing?.status ?? 'pending_probe');
   await upsertAccountTokenHealth(tokenId, {
-    status: 'request_failed_pending_probe',
+    status,
     lastFailureAt: at,
     lastUsedModel: normalizeOptionalText(input.modelName) ?? existing?.lastUsedModel ?? null,
     lastError: truncateError(input.error),
-    failureCount: Math.max(0, existing?.failureCount ?? 0) + 1,
-    nextProbeAt: at,
+    failureCount,
+    nextProbeAt: shouldMarkRequestFailed ? at : (existing?.nextProbeAt ?? null),
     updatedAt: at,
   });
 }
