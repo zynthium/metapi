@@ -32,6 +32,7 @@ describe('backupService', () => {
     await db.delete(schema.tokenRoutes).run();
     await db.delete(schema.tokenModelAvailability).run();
     await db.delete(schema.modelAvailability).run();
+    await db.delete(schema.accountTokenHealth).run();
     await db.delete(schema.proxyLogs).run();
     await db.delete(schema.checkinLogs).run();
     await db.delete(schema.siteAnnouncements).run();
@@ -66,6 +67,7 @@ describe('backupService', () => {
       isPinned: true,
       sortOrder: 9,
       apiKey: 'site-api-key',
+      tokenHealthProbeModel: 'site-probe-model',
       createdAt: now,
       updatedAt: now,
     }).returning().get();
@@ -100,6 +102,7 @@ describe('backupService', () => {
       valueStatus: 'ready' as any,
       upstreamTokenId: 'upstream-token-42',
       upstreamCreatedAt: '2026-03-20T09:00:00.000Z',
+      probeModel: 'token-probe-model',
       source: 'manual',
       enabled: true,
       isDefault: true,
@@ -151,6 +154,20 @@ describe('backupService', () => {
       lastUsedAt: now,
       lastFailAt: now,
       cooldownUntil: now,
+    }).run();
+
+    await db.insert(schema.accountTokenHealth).values({
+      tokenId: accountToken.id,
+      status: 'healthy',
+      lastSuccessAt: now,
+      lastFailureAt: null,
+      lastProbeAt: now,
+      lastProbeModel: 'token-probe-model',
+      lastUsedModel: 'gpt-5-mini',
+      lastError: null,
+      failureCount: 0,
+      nextProbeAt: null,
+      updatedAt: now,
     }).run();
 
     await db.insert(schema.siteDisabledModels).values({
@@ -264,6 +281,15 @@ describe('backupService', () => {
         tokenGroup: 'vip',
         upstreamTokenId: 'upstream-token-42',
         upstreamCreatedAt: '2026-03-20T09:00:00.000Z',
+        probeModel: 'token-probe-model',
+      }),
+    ]);
+    expect(exported.accounts.accountTokenHealth).toEqual([
+      expect.objectContaining({
+        tokenId: accountToken.id,
+        status: 'healthy',
+        lastProbeModel: 'token-probe-model',
+        lastUsedModel: 'gpt-5-mini',
       }),
     ]);
 
@@ -279,6 +305,7 @@ describe('backupService', () => {
     const restoredRoute = await db.select().from(schema.tokenRoutes).where(eq(schema.tokenRoutes.id, route.id)).get();
     const restoredChannel = await db.select().from(schema.routeChannels).where(eq(schema.routeChannels.routeId, route.id)).get();
     const restoredAccountToken = await db.select().from(schema.accountTokens).where(eq(schema.accountTokens.id, accountToken.id)).get();
+    const restoredTokenHealth = await db.select().from(schema.accountTokenHealth).where(eq(schema.accountTokenHealth.tokenId, accountToken.id)).get();
     const restoredDisabledModels = await db.select().from(schema.siteDisabledModels).all();
     const restoredModelAvailability = await db.select().from(schema.modelAvailability).all();
     const restoredDownstreamKeys = await db.select().from(schema.downstreamApiKeys).all();
@@ -289,6 +316,7 @@ describe('backupService', () => {
     expect(restoredSite?.customHeaders).toBe('{"cf-access-client-id":"roundtrip-client"}');
     expect(restoredSite?.isPinned).toBe(true);
     expect(restoredSite?.sortOrder).toBe(9);
+    expect(restoredSite?.tokenHealthProbeModel).toBe('site-probe-model');
 
     expect(restoredAccount?.isPinned).toBe(true);
     expect(restoredAccount?.sortOrder).toBe(7);
@@ -299,6 +327,13 @@ describe('backupService', () => {
       tokenGroup: 'vip',
       upstreamTokenId: 'upstream-token-42',
       upstreamCreatedAt: '2026-03-20T09:00:00.000Z',
+      probeModel: 'token-probe-model',
+    });
+    expect(restoredTokenHealth).toMatchObject({
+      tokenId: accountToken.id,
+      status: 'healthy',
+      lastProbeModel: 'token-probe-model',
+      lastUsedModel: 'gpt-5-mini',
     });
 
     expect(restoredRoute?.displayName).toBe('gpt-route');

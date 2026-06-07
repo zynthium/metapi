@@ -41,6 +41,7 @@ type SiteRow = typeof schema.sites.$inferSelect;
 type SiteApiEndpointRow = typeof schema.siteApiEndpoints.$inferSelect;
 type AccountRow = typeof schema.accounts.$inferSelect;
 type AccountTokenRow = typeof schema.accountTokens.$inferSelect;
+type AccountTokenHealthRow = typeof schema.accountTokenHealth.$inferSelect;
 type TokenRouteRow = typeof schema.tokenRoutes.$inferSelect;
 type RouteChannelRow = typeof schema.routeChannels.$inferSelect;
 type RouteGroupSourceRow = typeof schema.routeGroupSources.$inferSelect;
@@ -106,6 +107,7 @@ interface AccountsBackupSection {
   siteApiEndpoints?: SiteApiEndpointRow[];
   accounts: BackupAccountRow[];
   accountTokens: AccountTokenRow[];
+  accountTokenHealth?: AccountTokenHealthRow[];
   tokenRoutes: TokenRouteRow[];
   routeChannels: BackupRouteChannelRow[];
   routeGroupSources: RouteGroupSourceRow[];
@@ -1312,6 +1314,7 @@ async function exportAccountsSection(): Promise<AccountsBackupSection> {
     siteApiEndpoints,
     accounts,
     accountTokens,
+    accountTokenHealth,
     tokenRoutes,
     routeChannels,
     routeGroupSources,
@@ -1329,6 +1332,9 @@ async function exportAccountsSection(): Promise<AccountsBackupSection> {
       .all(),
     db.select().from(schema.accounts).orderBy(asc(schema.accounts.id)).all(),
     db.select().from(schema.accountTokens).orderBy(asc(schema.accountTokens.id)).all(),
+    db.select().from(schema.accountTokenHealth)
+      .orderBy(asc(schema.accountTokenHealth.tokenId), asc(schema.accountTokenHealth.id))
+      .all(),
     db.select().from(schema.tokenRoutes).orderBy(asc(schema.tokenRoutes.id)).all(),
     db.select().from(schema.routeChannels).orderBy(asc(schema.routeChannels.id)).all(),
     db.select().from(schema.routeGroupSources).orderBy(asc(schema.routeGroupSources.id)).all(),
@@ -1347,6 +1353,7 @@ async function exportAccountsSection(): Promise<AccountsBackupSection> {
     siteApiEndpoints,
     accounts: accounts.map(({ balanceUsed: _balanceUsed, lastCheckinAt: _lastCheckinAt, lastBalanceRefresh: _lastBalanceRefresh, ...row }) => row),
     accountTokens,
+    accountTokenHealth,
     tokenRoutes,
     routeChannels: routeChannels.map(({
       successCount: _successCount,
@@ -1430,6 +1437,9 @@ function coerceAccountsSection(input: unknown): AccountsBackupSection | null {
     : undefined;
   const accounts = Array.isArray(input.accounts) ? input.accounts as BackupAccountRow[] : null;
   const accountTokens = Array.isArray(input.accountTokens) ? input.accountTokens as AccountTokenRow[] : null;
+  const accountTokenHealth = Array.isArray(input.accountTokenHealth)
+    ? input.accountTokenHealth as AccountTokenHealthRow[]
+    : undefined;
   const tokenRoutes = Array.isArray(input.tokenRoutes) ? input.tokenRoutes as TokenRouteRow[] : null;
   const routeChannels = Array.isArray(input.routeChannels) ? input.routeChannels as BackupRouteChannelRow[] : null;
   const routeGroupSources = Array.isArray(input.routeGroupSources)
@@ -1452,6 +1462,7 @@ function coerceAccountsSection(input: unknown): AccountsBackupSection | null {
     siteApiEndpoints,
     accounts,
     accountTokens,
+    accountTokenHealth,
     tokenRoutes,
     routeChannels,
     routeGroupSources,
@@ -1550,6 +1561,7 @@ async function importAccountsSection(section: AccountsBackupSection): Promise<vo
     await tx.delete(schema.tokenRoutes).run();
     await tx.delete(schema.tokenModelAvailability).run();
     await tx.delete(schema.modelAvailability).run();
+    await tx.delete(schema.accountTokenHealth).run();
     await tx.delete(schema.accountTokens).run();
     await tx.delete(schema.accounts).run();
     await tx.delete(schema.sites).run();
@@ -1640,6 +1652,23 @@ async function importAccountsSection(section: AccountsBackupSection): Promise<vo
         enabled: row.enabled,
         isDefault: row.isDefault,
         createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      }).run();
+    }
+
+    for (const row of section.accountTokenHealth || []) {
+      await tx.insert(schema.accountTokenHealth).values({
+        id: row.id,
+        tokenId: row.tokenId,
+        status: row.status || 'unknown',
+        lastSuccessAt: row.lastSuccessAt ?? null,
+        lastFailureAt: row.lastFailureAt ?? null,
+        lastProbeAt: row.lastProbeAt ?? null,
+        lastProbeModel: row.lastProbeModel ?? null,
+        lastUsedModel: row.lastUsedModel ?? null,
+        lastError: row.lastError ?? null,
+        failureCount: row.failureCount ?? 0,
+        nextProbeAt: row.nextProbeAt ?? null,
         updatedAt: row.updatedAt,
       }).run();
     }

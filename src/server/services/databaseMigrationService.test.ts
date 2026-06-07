@@ -19,6 +19,7 @@ function createDbSchemaMock() {
     siteDisabledModels: { __table: 'siteDisabledModels' },
     accounts: { __table: 'accounts' },
     accountTokens: { __table: 'accountTokens' },
+    accountTokenHealth: { __table: 'accountTokenHealth' },
     accountGroupRatios: { __table: 'accountGroupRatios' },
     checkinLogs: { __table: 'checkinLogs' },
     modelAvailability: { __table: 'modelAvailability' },
@@ -215,12 +216,16 @@ describe('databaseMigrationService', () => {
           platform: 'openai',
           useSystemProxy: true,
           customHeaders: '{"x-site-scope":"internal"}',
+          tokenHealthProbeModel: 'site-probe-model',
           status: 'active',
         }],
+        siteApiEndpoints: [],
         siteAnnouncements: [],
         siteDisabledModels: [],
         accounts: [],
         accountTokens: [],
+        accountTokenHealth: [],
+        accountGroupRatios: [],
         checkinLogs: [],
         modelAvailability: [],
         tokenModelAvailability: [],
@@ -240,11 +245,14 @@ describe('databaseMigrationService', () => {
     const siteStatement = statements.find((statement) => statement.table === 'sites');
     const useSystemProxyIndex = siteStatement?.columns.indexOf('use_system_proxy') ?? -1;
     const customHeadersIndex = siteStatement?.columns.indexOf('custom_headers') ?? -1;
+    const tokenHealthProbeModelIndex = siteStatement?.columns.indexOf('token_health_probe_model') ?? -1;
 
     expect(useSystemProxyIndex).toBeGreaterThanOrEqual(0);
     expect(siteStatement?.values[useSystemProxyIndex]).toBe(true);
     expect(customHeadersIndex).toBeGreaterThanOrEqual(0);
     expect(siteStatement?.values[customHeadersIndex]).toBe('{"x-site-scope":"internal"}');
+    expect(tokenHealthProbeModelIndex).toBeGreaterThanOrEqual(0);
+    expect(siteStatement?.values[tokenHealthProbeModelIndex]).toBe('site-probe-model');
   });
 
   it('includes upstream token identity fields when building account token migration statements', () => {
@@ -265,12 +273,14 @@ describe('databaseMigrationService', () => {
           valueStatus: 'ready',
           upstreamTokenId: 'upstream-token-42',
           upstreamCreatedAt: '2026-03-20T09:00:00.000Z',
+          probeModel: 'gpt-5-mini',
           source: 'sync',
           enabled: true,
           isDefault: true,
           createdAt: '2026-03-20T10:00:00.000Z',
           updatedAt: '2026-03-21T10:00:00.000Z',
         }],
+        accountTokenHealth: [],
         accountGroupRatios: [],
         checkinLogs: [],
         modelAvailability: [],
@@ -293,8 +303,73 @@ describe('databaseMigrationService', () => {
     expect(statement).toBeDefined();
     expect(statement?.columns).toContain('upstream_token_id');
     expect(statement?.columns).toContain('upstream_created_at');
+    expect(statement?.columns).toContain('probe_model');
     expect(statement?.values[statement.columns.indexOf('upstream_token_id')]).toBe('upstream-token-42');
     expect(statement?.values[statement.columns.indexOf('upstream_created_at')]).toBe('2026-03-20T09:00:00.000Z');
+    expect(statement?.values[statement.columns.indexOf('probe_model')]).toBe('gpt-5-mini');
+  });
+
+  it('includes account token health when building migration statements', () => {
+    const statements = __databaseMigrationServiceTestUtils.buildStatements({
+      version: 'test',
+      timestamp: Date.now(),
+      accounts: {
+        sites: [],
+        siteApiEndpoints: [],
+        siteAnnouncements: [],
+        siteDisabledModels: [],
+        accounts: [],
+        accountTokens: [],
+        accountTokenHealth: [{
+          id: 4,
+          tokenId: 3,
+          status: 'healthy',
+          lastSuccessAt: '2026-06-07T01:00:00.000Z',
+          lastFailureAt: null,
+          lastProbeAt: '2026-06-07T01:00:00.000Z',
+          lastProbeModel: 'gpt-5-mini',
+          lastUsedModel: 'gpt-5-mini',
+          lastError: null,
+          failureCount: 0,
+          nextProbeAt: null,
+          updatedAt: '2026-06-07T01:00:00.000Z',
+        }],
+        accountGroupRatios: [],
+        checkinLogs: [],
+        modelAvailability: [],
+        tokenModelAvailability: [],
+        tokenRoutes: [],
+        routeChannels: [],
+        routeGroupSources: [],
+        proxyLogs: [],
+        proxyVideoTasks: [],
+        proxyFiles: [],
+        downstreamApiKeys: [],
+        events: [],
+      },
+      preferences: {
+        settings: [],
+      },
+    } as any);
+
+    const statement = statements.find((item) => item.table === 'account_token_health');
+    expect(statement).toBeDefined();
+    expect(statement?.columns).toEqual([
+      'id',
+      'token_id',
+      'status',
+      'last_success_at',
+      'last_failure_at',
+      'last_probe_at',
+      'last_probe_model',
+      'last_used_model',
+      'last_error',
+      'failure_count',
+      'next_probe_at',
+      'updated_at',
+    ]);
+    expect(statement?.values[statement.columns.indexOf('token_id')]).toBe(3);
+    expect(statement?.values[statement.columns.indexOf('last_probe_model')]).toBe('gpt-5-mini');
   });
 
   it('includes account group ratios when building migration statements', () => {
@@ -1047,6 +1122,11 @@ describe('databaseMigrationService', () => {
       siteDisabledModels: [],
       accounts: [],
       accountTokens: [],
+      accountTokenHealth: [{
+        id: 12,
+        tokenId: 1,
+        status: 'healthy',
+      }],
       checkinLogs: [],
       modelAvailability: [],
       tokenModelAvailability: [],
@@ -1090,6 +1170,7 @@ describe('databaseMigrationService', () => {
       });
 
       expect(summary.rows.siteAnnouncements).toBe(1);
+      expect(summary.rows.accountTokenHealth).toBe(1);
       expect(client.begin).toHaveBeenCalledTimes(1);
       expect(client.commit).toHaveBeenCalledTimes(1);
       expect(client.close).toHaveBeenCalledTimes(1);

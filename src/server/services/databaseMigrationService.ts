@@ -34,6 +34,7 @@ type BackupSnapshot = {
     siteDisabledModels: Array<Record<string, unknown>>;
     accounts: Array<Record<string, unknown>>;
     accountTokens: Array<Record<string, unknown>>;
+    accountTokenHealth: Array<Record<string, unknown>>;
     accountGroupRatios: Array<Record<string, unknown>>;
     checkinLogs: Array<Record<string, unknown>>;
     modelAvailability: Array<Record<string, unknown>>;
@@ -65,6 +66,7 @@ export interface DatabaseMigrationSummary {
     siteDisabledModels: number;
     accounts: number;
     accountTokens: number;
+    accountTokenHealth: number;
     accountGroupRatios: number;
     tokenRoutes: number;
     routeChannels: number;
@@ -260,6 +262,7 @@ async function toBackupSnapshot(): Promise<BackupSnapshot> {
       siteDisabledModels: await db.select().from(schema.siteDisabledModels).all() as Array<Record<string, unknown>>,
       accounts: await db.select().from(schema.accounts).all() as Array<Record<string, unknown>>,
       accountTokens: await db.select().from(schema.accountTokens).all() as Array<Record<string, unknown>>,
+      accountTokenHealth: await db.select().from(schema.accountTokenHealth).all() as Array<Record<string, unknown>>,
       accountGroupRatios: await db.select().from(schema.accountGroupRatios).all() as Array<Record<string, unknown>>,
       checkinLogs: await db.select().from(schema.checkinLogs).all() as Array<Record<string, unknown>>,
       modelAvailability: await db.select().from(schema.modelAvailability).all() as Array<Record<string, unknown>>,
@@ -301,6 +304,7 @@ async function clearTargetData(client: SqlClient): Promise<void> {
     'proxy_logs',
     'proxy_video_tasks',
     'proxy_files',
+    'account_token_health',
     'account_group_ratios',
     'account_tokens',
     'accounts',
@@ -327,7 +331,7 @@ function buildStatements(
   for (const row of snapshot.accounts.sites) {
     statements.push({
       table: 'sites',
-      columns: ['id', 'name', 'url', 'external_checkin_url', 'platform', 'proxy_url', 'use_system_proxy', 'custom_headers', 'status', 'is_pinned', 'sort_order', 'global_weight', 'api_key', 'created_at', 'updated_at'],
+      columns: ['id', 'name', 'url', 'external_checkin_url', 'platform', 'proxy_url', 'use_system_proxy', 'custom_headers', 'status', 'is_pinned', 'sort_order', 'global_weight', 'api_key', 'post_refresh_probe_enabled', 'post_refresh_probe_model', 'post_refresh_probe_scope', 'post_refresh_probe_latency_threshold_ms', 'token_health_probe_model', 'created_at', 'updated_at'],
       values: [
         asNumber(row.id, 0),
         asNullableString(row.name),
@@ -342,6 +346,11 @@ function buildStatements(
         asNumber(row.sortOrder, 0),
         asNumber(row.globalWeight, 1),
         asNullableString(row.apiKey),
+        asBoolean(row.postRefreshProbeEnabled, false),
+        asNullableString(row.postRefreshProbeModel) ?? '',
+        asNullableString(row.postRefreshProbeScope) ?? 'single',
+        asNumber(row.postRefreshProbeLatencyThresholdMs, 0),
+        asNullableString(row.tokenHealthProbeModel),
         asNullableString(row.createdAt),
         asNullableString(row.updatedAt),
       ],
@@ -468,7 +477,7 @@ function buildStatements(
   for (const row of snapshot.accounts.accountTokens) {
     statements.push({
       table: 'account_tokens',
-      columns: ['id', 'account_id', 'name', 'token', 'token_group', 'value_status', 'upstream_token_id', 'upstream_created_at', 'source', 'enabled', 'is_default', 'created_at', 'updated_at'],
+      columns: ['id', 'account_id', 'name', 'token', 'token_group', 'value_status', 'upstream_token_id', 'upstream_created_at', 'probe_model', 'source', 'enabled', 'is_default', 'created_at', 'updated_at'],
       values: [
         asNumber(row.id, 0),
         asNumber(row.accountId, 0),
@@ -478,10 +487,45 @@ function buildStatements(
         asNullableString((row as { valueStatus?: unknown }).valueStatus) ?? 'ready',
         asNullableString(row.upstreamTokenId),
         asNullableString(row.upstreamCreatedAt),
+        asNullableString(row.probeModel),
         asNullableString(row.source) ?? 'manual',
         asBoolean(row.enabled, true),
         asBoolean(row.isDefault, false),
         asNullableString(row.createdAt),
+        asNullableString(row.updatedAt),
+      ],
+    });
+  }
+
+  for (const row of (snapshot.accounts.accountTokenHealth || [])) {
+    statements.push({
+      table: 'account_token_health',
+      columns: [
+        'id',
+        'token_id',
+        'status',
+        'last_success_at',
+        'last_failure_at',
+        'last_probe_at',
+        'last_probe_model',
+        'last_used_model',
+        'last_error',
+        'failure_count',
+        'next_probe_at',
+        'updated_at',
+      ],
+      values: [
+        asNumber(row.id, 0),
+        asNumber(row.tokenId, 0),
+        asNullableString(row.status) ?? 'unknown',
+        asNullableString(row.lastSuccessAt),
+        asNullableString(row.lastFailureAt),
+        asNullableString(row.lastProbeAt),
+        asNullableString(row.lastProbeModel),
+        asNullableString(row.lastUsedModel),
+        asNullableString(row.lastError),
+        asNumber(row.failureCount, 0),
+        asNullableString(row.nextProbeAt),
         asNullableString(row.updatedAt),
       ],
     });
@@ -776,6 +820,7 @@ async function syncPostgresSequences(client: SqlClient): Promise<void> {
     'site_disabled_models',
     'accounts',
     'account_tokens',
+    'account_token_health',
     'account_group_ratios',
     'checkin_logs',
     'model_availability',
@@ -846,6 +891,7 @@ export async function migrateCurrentDatabase(input: DatabaseMigrationInput): Pro
       siteDisabledModels: snapshot.accounts.siteDisabledModels.length,
       accounts: snapshot.accounts.accounts.length,
       accountTokens: snapshot.accounts.accountTokens.length,
+      accountTokenHealth: snapshot.accounts.accountTokenHealth.length,
       accountGroupRatios: snapshot.accounts.accountGroupRatios.length,
       tokenRoutes: snapshot.accounts.tokenRoutes.length,
       routeChannels: snapshot.accounts.routeChannels.length,
