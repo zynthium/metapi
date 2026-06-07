@@ -1,6 +1,7 @@
 import { config as runtimeConfig } from '../config.js';
 import { getAccountsSnapshot } from './accountsOverviewService.js';
 import { executeRefreshAccountRuntimeHealth } from './accountRuntimeHealthRefreshService.js';
+import { executeAccountTokenHealthProbeSweep } from './accountTokenHealthService.js';
 import { syncAllAccountTokens } from './accountTokenSyncService.js';
 import {
   DEFAULT_CONNECTION_MAINTENANCE_CONFIG,
@@ -82,6 +83,12 @@ async function execute(config: ConnectionMaintenanceConfig): Promise<ConnectionM
     stages.groupRatios = await refreshAllAccountGroupRatios({
       retryAttempts: config.retryAttempts,
       attemptTimeoutMs,
+      concurrency: config.concurrency,
+    });
+  }
+
+  if (config.stages.tokenHealth) {
+    stages.tokenHealth = await executeAccountTokenHealthProbeSweep({
       concurrency: config.concurrency,
     });
   }

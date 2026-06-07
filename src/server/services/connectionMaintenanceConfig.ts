@@ -3,6 +3,7 @@ export type ConnectionMaintenanceStageKey =
   | 'accountHealth'
   | 'tokens'
   | 'groupRatios'
+  | 'tokenHealth'
   | 'modelCoverage'
   | 'routeMultipliers'
   | 'routeDecisionSnapshots'
@@ -24,6 +25,7 @@ export const DEFAULT_CONNECTION_MAINTENANCE_STAGES: ConnectionMaintenanceStages 
   accountHealth: true,
   tokens: true,
   groupRatios: true,
+  tokenHealth: true,
   modelCoverage: true,
   routeMultipliers: true,
   routeDecisionSnapshots: true,

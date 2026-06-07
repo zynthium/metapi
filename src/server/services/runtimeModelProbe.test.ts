@@ -127,4 +127,30 @@ describe('probeRuntimeModel', () => {
     expect(result.latencyMs).not.toBeNull();
     expect(elapsedMs).toBeLessThan(200);
   });
+
+  it('uses the minimal request body for token health probes', async () => {
+    resolveUpstreamEndpointCandidatesMock.mockResolvedValue(['chat']);
+    dispatchRuntimeRequestMock.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    const { probeRuntimeModel } = await import('./runtimeModelProbe.js');
+    const result = await probeRuntimeModel({
+      site,
+      account,
+      modelName: 'gpt-5.4',
+      timeoutMs: 1000,
+      tokenValue: 'sk-token-health',
+      probeKind: 'token-health',
+    });
+
+    expect(result.status).toBe('supported');
+    expect(buildUpstreamEndpointRequestMock).toHaveBeenCalledWith(expect.objectContaining({
+      openaiBody: {
+        model: 'gpt-5.4',
+        messages: [{ role: 'user', content: '1' }],
+        max_tokens: 1,
+        stream: false,
+      },
+      tokenValue: 'sk-token-health',
+    }));
+  });
 });

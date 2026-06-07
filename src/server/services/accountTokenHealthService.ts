@@ -1,9 +1,19 @@
-import { eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
+import { config } from '../config.js';
 import { db, schema } from '../db/index.js';
 import { isReadyAccountToken } from './accountTokenService.js';
+import {
+  probeRuntimeModel,
+  type RuntimeModelProbeStatus,
+} from './runtimeModelProbe.js';
 
 type AccountTokenRow = typeof schema.accountTokens.$inferSelect;
 type AccountTokenHealthRow = typeof schema.accountTokenHealth.$inferSelect;
+type AccountRow = typeof schema.accounts.$inferSelect;
+type SiteRow = typeof schema.sites.$inferSelect;
+
+const DEFAULT_TOKEN_HEALTH_STALE_AFTER_MS = 6 * 60 * 60 * 1000;
+const TOKEN_HEALTH_FAILURE_THRESHOLD = 5;
 
 export type AccountTokenHealthStatus =
   | 'healthy'
@@ -33,6 +43,33 @@ export type AccountTokenHealthSummary = {
   stale: boolean;
 };
 
+export type AccountTokenHealthProbeTarget = {
+  tokenId: number;
+  tokenValue: string;
+  account: AccountRow;
+  site: SiteRow;
+  probeModel: string;
+  probeModelSource: ProbeModelSource;
+  health: AccountTokenHealthRow | null;
+};
+
+export type AccountTokenHealthProbeResult = {
+  tokenId: number;
+  status: AccountTokenHealthStatus;
+  probeStatus?: RuntimeModelProbeStatus;
+  latencyMs?: number | null;
+  reason: string;
+};
+
+export type AccountTokenHealthProbeSweepResult = {
+  scanned: number;
+  probed: number;
+  healthy: number;
+  failed: number;
+  skipped: number;
+  results: AccountTokenHealthProbeResult[];
+};
+
 function normalizeOptionalText(value: string | null | undefined): string | null {
   const trimmed = String(value || '').trim();
   return trimmed || null;
@@ -46,6 +83,12 @@ function truncateError(value: string | null | undefined): string | null {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function isoFromMs(nowMs: number | null | undefined): string {
+  return Number.isFinite(nowMs as number)
+    ? new Date(Math.trunc(nowMs as number)).toISOString()
+    : nowIso();
 }
 
 function statusLabel(status: AccountTokenHealthStatus): string {
@@ -69,6 +112,69 @@ function parseTimestampMs(value: string | null | undefined): number | null {
   if (!value) return null;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function resolveGlobalProbeModel(input?: string | null): string | null {
+  const explicit = normalizeOptionalText(input);
+  if (explicit) return explicit;
+  return normalizeOptionalText((config as unknown as { tokenHealthProbeModel?: string | null }).tokenHealthProbeModel);
+}
+
+function isActiveStatus(value: string | null | undefined): boolean {
+  return (value || 'active') === 'active';
+}
+
+function isHealthRowStale(
+  health: AccountTokenHealthRow | null | undefined,
+  nowMs: number,
+  staleAfterMs: number,
+): boolean {
+  if (!health) return true;
+  const lastSuccessMs = parseTimestampMs(health.lastSuccessAt);
+  const lastProbeMs = parseTimestampMs(health.lastProbeAt);
+  const latestHealthyMs = Math.max(lastSuccessMs ?? 0, lastProbeMs ?? 0);
+  return latestHealthyMs <= 0 || nowMs - latestHealthyMs > staleAfterMs;
+}
+
+function isProbeDue(
+  health: AccountTokenHealthRow | null,
+  nowMs: number,
+  staleAfterMs: number,
+): boolean {
+  if (!health) return true;
+  if (health.status === 'healthy') {
+    return isHealthRowStale(health, nowMs, staleAfterMs);
+  }
+  if (health.status === 'request_failed_pending_probe' || health.status === 'probe_failed') {
+    const nextProbeMs = parseTimestampMs(health.nextProbeAt);
+    return nextProbeMs == null || nextProbeMs <= nowMs || isHealthRowStale(health, nowMs, staleAfterMs);
+  }
+  if (health.status === 'not_probeable') {
+    return isHealthRowStale(health, nowMs, staleAfterMs);
+  }
+  return true;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const safeConcurrency = Math.max(1, Math.min(items.length || 1, Math.trunc(concurrency || 1)));
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  const runWorker = async () => {
+    while (true) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      if (currentIndex >= items.length) return;
+      results[currentIndex] = await worker(items[currentIndex] as T, currentIndex);
+    }
+  };
+
+  await Promise.all(Array.from({ length: safeConcurrency }, () => runWorker()));
+  return results;
 }
 
 export function resolveAccountTokenProbeModel(input: {
@@ -100,7 +206,7 @@ export function buildAccountTokenHealthSummary(input: {
   const nowMs = Number.isFinite(input.nowMs) ? input.nowMs! : Date.now();
   const staleAfterMs = Number.isFinite(input.staleAfterMs)
     ? Math.max(1, input.staleAfterMs!)
-    : 6 * 60 * 60 * 1000;
+    : DEFAULT_TOKEN_HEALTH_STALE_AFTER_MS;
   const lastSuccessMs = parseTimestampMs(input.health?.lastSuccessAt);
   const lastProbeMs = parseTimestampMs(input.health?.lastProbeAt);
   const latestHealthyMs = Math.max(lastSuccessMs ?? 0, lastProbeMs ?? 0);
@@ -140,6 +246,67 @@ export function buildAccountTokenHealthSummary(input: {
     lastError: input.health?.lastError ?? null,
     stale,
   };
+}
+
+export async function loadAccountTokenHealthProbeTargets(input: {
+  nowMs?: number;
+  staleAfterMs?: number;
+  limit?: number;
+  globalProbeModel?: string | null;
+} = {}): Promise<AccountTokenHealthProbeTarget[]> {
+  const nowMs = Number.isFinite(input.nowMs as number) ? Math.trunc(input.nowMs as number) : Date.now();
+  const staleAfterMs = Number.isFinite(input.staleAfterMs as number)
+    ? Math.max(1, Math.trunc(input.staleAfterMs as number))
+    : DEFAULT_TOKEN_HEALTH_STALE_AFTER_MS;
+  const limit = Number.isFinite(input.limit as number)
+    ? Math.max(0, Math.trunc(input.limit as number))
+    : 200;
+  const globalProbeModel = resolveGlobalProbeModel(input.globalProbeModel);
+
+  const rows = await db.select()
+    .from(schema.accountTokens)
+    .innerJoin(schema.accounts, eq(schema.accountTokens.accountId, schema.accounts.id))
+    .innerJoin(schema.sites, eq(schema.accounts.siteId, schema.sites.id))
+    .leftJoin(schema.accountTokenHealth, eq(schema.accountTokens.id, schema.accountTokenHealth.tokenId))
+    .where(and(
+      eq(schema.accountTokens.enabled, true),
+      eq(schema.accounts.status, 'active'),
+      eq(schema.sites.status, 'active'),
+    ))
+    .orderBy(asc(schema.accountTokens.id))
+    .all();
+
+  const targets: AccountTokenHealthProbeTarget[] = [];
+  for (const row of rows) {
+    const token = row.account_tokens;
+    const account = row.accounts;
+    const site = row.sites;
+    const health = row.account_token_health;
+    if (!isReadyAccountToken(token)) continue;
+    if (!isActiveStatus(account.status) || !isActiveStatus(site.status)) continue;
+    if (!isProbeDue(health, nowMs, staleAfterMs)) continue;
+
+    const tokenValue = normalizeOptionalText(token.token);
+    if (!tokenValue) continue;
+    const probeModel = resolveAccountTokenProbeModel({
+      tokenProbeModel: token.probeModel,
+      siteProbeModel: site.tokenHealthProbeModel,
+      globalProbeModel,
+    });
+    if (!probeModel.model) continue;
+    targets.push({
+      tokenId: token.id,
+      tokenValue,
+      account,
+      site,
+      probeModel: probeModel.model,
+      probeModelSource: probeModel.source,
+      health,
+    });
+    if (limit > 0 && targets.length >= limit) break;
+  }
+
+  return targets;
 }
 
 async function upsertAccountTokenHealth(
@@ -208,4 +375,208 @@ export async function recordAccountTokenRequestFailure(input: {
     nextProbeAt: at,
     updatedAt: at,
   });
+}
+
+async function loadAccountTokenProbeTargetById(input: {
+  tokenId: number;
+  nowMs: number;
+  globalProbeModel?: string | null;
+}): Promise<AccountTokenHealthProbeTarget | null> {
+  const row = await db.select()
+    .from(schema.accountTokens)
+    .innerJoin(schema.accounts, eq(schema.accountTokens.accountId, schema.accounts.id))
+    .innerJoin(schema.sites, eq(schema.accounts.siteId, schema.sites.id))
+    .leftJoin(schema.accountTokenHealth, eq(schema.accountTokens.id, schema.accountTokenHealth.tokenId))
+    .where(eq(schema.accountTokens.id, input.tokenId))
+    .get();
+  if (!row) return null;
+
+  const token = row.account_tokens;
+  const account = row.accounts;
+  const site = row.sites;
+  const globalProbeModel = resolveGlobalProbeModel(input.globalProbeModel);
+  const probeModel = resolveAccountTokenProbeModel({
+    tokenProbeModel: token.probeModel,
+    siteProbeModel: site.tokenHealthProbeModel,
+    globalProbeModel,
+  });
+  const tokenValue = normalizeOptionalText(token.token);
+  if (
+    token.enabled !== true
+    || !isReadyAccountToken(token)
+    || !isActiveStatus(account.status)
+    || !isActiveStatus(site.status)
+    || !tokenValue
+    || !probeModel.model
+  ) {
+    return {
+      tokenId: token.id,
+      tokenValue: tokenValue || '',
+      account,
+      site,
+      probeModel: probeModel.model || '',
+      probeModelSource: probeModel.source,
+      health: row.account_token_health,
+    };
+  }
+
+  return {
+    tokenId: token.id,
+    tokenValue,
+    account,
+    site,
+    probeModel: probeModel.model,
+    probeModelSource: probeModel.source,
+    health: row.account_token_health,
+  };
+}
+
+export async function probeAccountTokenHealth(input: {
+  tokenId: number | null | undefined;
+  scheduled?: boolean;
+  nowMs?: number;
+  timeoutMs?: number;
+  globalProbeModel?: string | null;
+}): Promise<AccountTokenHealthProbeResult> {
+  const tokenId = Number(input.tokenId);
+  if (!Number.isSafeInteger(tokenId) || tokenId <= 0) {
+    return {
+      tokenId: 0,
+      status: 'not_probeable',
+      reason: 'invalid token id',
+    };
+  }
+
+  const nowMs = Number.isFinite(input.nowMs as number) ? Math.trunc(input.nowMs as number) : Date.now();
+  const at = isoFromMs(nowMs);
+  const target = await loadAccountTokenProbeTargetById({
+    tokenId,
+    nowMs,
+    globalProbeModel: input.globalProbeModel,
+  });
+  if (!target) {
+    return {
+      tokenId,
+      status: 'not_probeable',
+      reason: 'token not found',
+    };
+  }
+  if (!target.tokenValue || !target.probeModel) {
+    await upsertAccountTokenHealth(tokenId, {
+      status: 'not_probeable',
+      lastProbeAt: at,
+      lastProbeModel: target.probeModel || null,
+      lastError: 'token is not probeable',
+      updatedAt: at,
+    });
+    return {
+      tokenId,
+      status: 'not_probeable',
+      reason: 'token is not probeable',
+    };
+  }
+
+  const probe = await probeRuntimeModel({
+    site: target.site,
+    account: target.account,
+    modelName: target.probeModel,
+    timeoutMs: Math.max(3_000, Math.trunc(input.timeoutMs || config.modelAvailabilityProbeTimeoutMs)),
+    tokenValue: target.tokenValue,
+    probeKind: 'token-health',
+  });
+
+  if (probe.status === 'supported') {
+    await upsertAccountTokenHealth(tokenId, {
+      status: 'healthy',
+      lastSuccessAt: at,
+      lastProbeAt: at,
+      lastProbeModel: target.probeModel,
+      lastError: null,
+      failureCount: 0,
+      nextProbeAt: null,
+      updatedAt: at,
+    });
+    return {
+      tokenId,
+      status: 'healthy',
+      probeStatus: probe.status,
+      latencyMs: probe.latencyMs,
+      reason: probe.reason,
+    };
+  }
+
+  if (probe.status === 'skipped') {
+    await upsertAccountTokenHealth(tokenId, {
+      status: 'not_probeable',
+      lastProbeAt: at,
+      lastProbeModel: target.probeModel,
+      lastError: truncateError(probe.reason),
+      updatedAt: at,
+    });
+    return {
+      tokenId,
+      status: 'not_probeable',
+      probeStatus: probe.status,
+      latencyMs: probe.latencyMs,
+      reason: probe.reason,
+    };
+  }
+
+  const failureCount = Math.max(0, target.health?.failureCount ?? 0) + 1;
+  const nextStatus: AccountTokenHealthStatus = input.scheduled && failureCount >= TOKEN_HEALTH_FAILURE_THRESHOLD
+    ? 'probe_failed'
+    : 'request_failed_pending_probe';
+  await upsertAccountTokenHealth(tokenId, {
+    status: nextStatus,
+    lastFailureAt: at,
+    lastProbeAt: at,
+    lastProbeModel: target.probeModel,
+    lastError: truncateError(probe.reason),
+    failureCount,
+    nextProbeAt: at,
+    updatedAt: at,
+  });
+
+  return {
+    tokenId,
+    status: nextStatus,
+    probeStatus: probe.status,
+    latencyMs: probe.latencyMs,
+    reason: probe.reason,
+  };
+}
+
+export async function executeAccountTokenHealthProbeSweep(input: {
+  concurrency?: number;
+  limit?: number;
+  nowMs?: number;
+  staleAfterMs?: number;
+  globalProbeModel?: string | null;
+} = {}): Promise<AccountTokenHealthProbeSweepResult> {
+  const nowMs = Number.isFinite(input.nowMs as number) ? Math.trunc(input.nowMs as number) : Date.now();
+  const targets = await loadAccountTokenHealthProbeTargets({
+    nowMs,
+    staleAfterMs: input.staleAfterMs,
+    limit: input.limit,
+    globalProbeModel: input.globalProbeModel,
+  });
+  const results = await mapWithConcurrency(
+    targets,
+    input.concurrency || 3,
+    async (target) => probeAccountTokenHealth({
+      tokenId: target.tokenId,
+      scheduled: true,
+      nowMs,
+      globalProbeModel: input.globalProbeModel,
+    }),
+  );
+
+  return {
+    scanned: targets.length,
+    probed: results.filter((item) => item.probeStatus !== undefined).length,
+    healthy: results.filter((item) => item.status === 'healthy').length,
+    failed: results.filter((item) => item.status === 'probe_failed').length,
+    skipped: results.filter((item) => item.status === 'not_probeable').length,
+    results,
+  };
 }

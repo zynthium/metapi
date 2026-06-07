@@ -58,7 +58,23 @@ function classifyUnsupportedFailure(status: number, rawErrorText: string): boole
   return DEFINITE_UNSUPPORTED_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-function buildProbeBody(modelName: string): Record<string, unknown> {
+export type RuntimeModelProbeKind = 'model-availability' | 'token-health';
+
+function buildProbeBody(modelName: string, probeKind: RuntimeModelProbeKind): Record<string, unknown> {
+  if (probeKind === 'token-health') {
+    return {
+      model: modelName,
+      messages: [
+        {
+          role: 'user',
+          content: '1',
+        },
+      ],
+      max_tokens: 1,
+      stream: false,
+    };
+  }
+
   return {
     model: modelName,
     messages: [
@@ -101,6 +117,7 @@ export async function probeRuntimeModel(input: {
   modelName: string;
   timeoutMs: number;
   tokenValue?: string | null;
+  probeKind?: RuntimeModelProbeKind;
 }): Promise<RuntimeModelProbeResult> {
   if (!isLikelyConversationModel(input.modelName)) {
     return {
@@ -155,7 +172,7 @@ export async function probeRuntimeModel(input: {
       account: input.account,
       downstreamHeaders: {},
     });
-    const openaiBody = buildProbeBody(input.modelName);
+    const openaiBody = buildProbeBody(input.modelName, input.probeKind || 'model-availability');
     const channelProxyUrl = resolveChannelProxyUrl(input.site, input.account.extraConfig);
     const abortController = new AbortController();
     const remainingExecutionTimeoutMs = resolveRemainingTimeoutMs(
