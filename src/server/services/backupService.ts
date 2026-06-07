@@ -676,6 +676,7 @@ function pushDefaultImportedToken(
     valueStatus: 'ready',
     upstreamTokenId: null,
     upstreamCreatedAt: null,
+    probeModel: null,
     source: 'legacy',
     enabled: true,
     isDefault: true,
@@ -771,6 +772,7 @@ function buildAllApiHubV2AccountsSection(data: RawBackupData): {
       postRefreshProbeModel: '',
       postRefreshProbeScope: 'single',
       postRefreshProbeLatencyThresholdMs: 0,
+      tokenHealthProbeModel: null,
       createdAt: input.createdAt,
       updatedAt: input.updatedAt,
     });
@@ -1018,6 +1020,7 @@ function buildAccountsSectionFromRefBackup(data: RawBackupData): AccountsBackupS
         postRefreshProbeModel: '',
         postRefreshProbeScope: 'single',
         postRefreshProbeLatencyThresholdMs: 0,
+        tokenHealthProbeModel: null,
         createdAt: toIsoString(item.created_at),
         updatedAt: toIsoString(item.updated_at),
       });
@@ -1092,6 +1095,7 @@ function buildAccountsSectionFromRefBackup(data: RawBackupData): AccountsBackupS
         valueStatus: 'ready',
         upstreamTokenId: null,
         upstreamCreatedAt: null,
+        probeModel: null,
         source: 'legacy',
         enabled: true,
         isDefault: true,
@@ -1569,6 +1573,7 @@ async function importAccountsSection(section: AccountsBackupSection): Promise<vo
         postRefreshProbeModel: row.postRefreshProbeModel ?? '',
         postRefreshProbeScope: (row.postRefreshProbeScope === 'all' ? 'all' : 'single') as 'single' | 'all',
         postRefreshProbeLatencyThresholdMs: row.postRefreshProbeLatencyThresholdMs ?? 0,
+        tokenHealthProbeModel: row.tokenHealthProbeModel ?? null,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
       }).run();
@@ -1630,6 +1635,7 @@ async function importAccountsSection(section: AccountsBackupSection): Promise<vo
         valueStatus: row.valueStatus ?? 'ready',
         upstreamTokenId: row.upstreamTokenId ?? null,
         upstreamCreatedAt: row.upstreamCreatedAt ?? null,
+        probeModel: row.probeModel ?? null,
         source: row.source,
         enabled: row.enabled,
         isDefault: row.isDefault,
