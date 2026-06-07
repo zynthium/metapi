@@ -12,6 +12,7 @@ const createApiTokenMock = vi.fn();
 const getUserGroupsMock = vi.fn();
 const deleteApiTokenMock = vi.fn();
 const fetchGroupRatioForSiteMock = vi.fn();
+const probeRuntimeModelMock = vi.fn();
 
 type AccountTokenServiceModule = typeof import('../../services/accountTokenService.js');
 
@@ -27,6 +28,10 @@ vi.mock('../../services/platforms/index.js', () => ({
 
 vi.mock('../../services/modelPricingService.js', () => ({
   fetchGroupRatioForSite: (...args: unknown[]) => fetchGroupRatioForSiteMock(...args),
+}));
+
+vi.mock('../../services/runtimeModelProbe.js', () => ({
+  probeRuntimeModel: (...args: unknown[]) => probeRuntimeModelMock(...args),
 }));
 
 type DbModule = typeof import('../../db/index.js');
@@ -92,6 +97,12 @@ describe('account tokens sync routes with site status', () => {
     getUserGroupsMock.mockReset();
     deleteApiTokenMock.mockReset();
     fetchGroupRatioForSiteMock.mockReset();
+    probeRuntimeModelMock.mockReset();
+    probeRuntimeModelMock.mockResolvedValue({
+      status: 'supported',
+      latencyMs: 9,
+      reason: 'probe succeeded',
+    });
     seedId = 0;
 
     await db.delete(schema.accountGroupRatios).run();
@@ -894,6 +905,133 @@ describe('account tokens sync routes with site status', () => {
         isDefault: true,
         enabled: true,
       }),
+    });
+  });
+
+  it('stores and returns token probe model and health summary', async () => {
+    const { account } = await seedAccount({ siteStatus: 'active' });
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/account-tokens',
+      payload: {
+        accountId: account.id,
+        name: 'manual-token-health',
+        token: 'sk-manual-token-health',
+        probeModel: 'gpt-5.4-mini',
+      },
+    });
+
+    expect(createResponse.statusCode).toBe(200);
+    expect(createResponse.json()).toMatchObject({
+      success: true,
+      token: expect.objectContaining({
+        probeModel: 'gpt-5.4-mini',
+      }),
+    });
+
+    const listResponse = await app.inject({
+      method: 'GET',
+      url: `/api/account-tokens?accountId=${account.id}`,
+    });
+
+    expect(listResponse.statusCode).toBe(200);
+    expect(listResponse.json()).toEqual([
+      expect.objectContaining({
+        name: 'manual-token-health',
+        probeModel: 'gpt-5.4-mini',
+        health: expect.objectContaining({
+          status: 'pending_probe',
+          probeModel: 'gpt-5.4-mini',
+          probeModelSource: 'token',
+        }),
+      }),
+    ]);
+  });
+
+  it('updates the token probe model override', async () => {
+    const { account } = await seedAccount({ siteStatus: 'active' });
+    const token = await db.insert(schema.accountTokens).values({
+      accountId: account.id,
+      name: 'probe-override-token',
+      token: 'sk-probe-override-token',
+      source: 'manual',
+      enabled: true,
+      isDefault: false,
+    }).returning().get();
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/api/account-tokens/${token.id}`,
+      payload: {
+        probeModel: 'gpt-5.4',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      success: true,
+      token: expect.objectContaining({
+        id: token.id,
+        probeModel: 'gpt-5.4',
+      }),
+    });
+
+    const latest = await db.select()
+      .from(schema.accountTokens)
+      .where(eq(schema.accountTokens.id, token.id))
+      .get();
+    expect(latest?.probeModel).toBe('gpt-5.4');
+  });
+
+  it('manually probes an account token and persists healthy status', async () => {
+    const { account, site } = await seedAccount({ siteStatus: 'active' });
+    await db.update(schema.sites)
+      .set({ tokenHealthProbeModel: 'site-health-model' })
+      .where(eq(schema.sites.id, site.id))
+      .run();
+    const token = await db.insert(schema.accountTokens).values({
+      accountId: account.id,
+      name: 'manual-probe-token',
+      token: 'sk-manual-probe-token',
+      source: 'manual',
+      enabled: true,
+      isDefault: false,
+    }).returning().get();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/account-tokens/${token.id}/health/probe`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      success: true,
+      result: expect.objectContaining({
+        tokenId: token.id,
+        status: 'healthy',
+        probeStatus: 'supported',
+      }),
+      health: expect.objectContaining({
+        status: 'healthy',
+        probeModel: 'site-health-model',
+        probeModelSource: 'site',
+      }),
+    });
+    expect(probeRuntimeModelMock).toHaveBeenCalledWith(expect.objectContaining({
+      modelName: 'site-health-model',
+      tokenValue: 'sk-manual-probe-token',
+      probeKind: 'token-health',
+    }));
+
+    const health = await db.select()
+      .from(schema.accountTokenHealth)
+      .where(eq(schema.accountTokenHealth.tokenId, token.id))
+      .get();
+    expect(health).toMatchObject({
+      status: 'healthy',
+      failureCount: 0,
+      lastProbeModel: 'site-health-model',
     });
   });
 

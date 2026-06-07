@@ -1,5 +1,6 @@
 ﻿import { FastifyInstance } from 'fastify';
 import { and, eq } from 'drizzle-orm';
+import { config } from '../../config.js';
 import { db, schema } from '../../db/index.js';
 import { insertAndGetById } from '../../db/insertHelpers.js';
 import {
@@ -34,6 +35,11 @@ import {
   parseAccountTokenSyncAllPayload,
   parseAccountTokenUpdatePayload,
 } from '../../contracts/accountTokensRoutePayloads.js';
+import {
+  buildAccountTokenHealthSummary,
+  probeAccountTokenHealth,
+  resolveAccountTokenProbeModel,
+} from '../../services/accountTokenHealthService.js';
 
 function buildSyncAccountLabel(item: SyncExecutionResult): string {
   const account = (item.accountName || `#${item.accountId}`).trim();
@@ -129,6 +135,33 @@ function normalizeBatchIds(input: unknown): number[] {
     .filter((id) => Number.isFinite(id) && id > 0);
 }
 
+function normalizeNullableText(value: unknown): string | null {
+  return String(value || '').trim() || null;
+}
+
+async function loadAccountTokenHealthSummary(tokenId: number) {
+  const row = await db.select()
+    .from(schema.accountTokens)
+    .innerJoin(schema.accounts, eq(schema.accountTokens.accountId, schema.accounts.id))
+    .innerJoin(schema.sites, eq(schema.accounts.siteId, schema.sites.id))
+    .leftJoin(schema.accountTokenHealth, eq(schema.accountTokens.id, schema.accountTokenHealth.tokenId))
+    .where(eq(schema.accountTokens.id, tokenId))
+    .get();
+  if (!row) return null;
+  return buildAccountTokenHealthSummary({
+    token: row.account_tokens,
+    accountStatus: row.accounts.status,
+    siteStatus: row.sites.status,
+    health: row.account_token_health,
+    probeModel: resolveAccountTokenProbeModel({
+      tokenProbeModel: row.account_tokens.probeModel,
+      siteProbeModel: row.sites.tokenHealthProbeModel,
+      globalProbeModel: config.tokenHealthProbeModel,
+    }),
+    staleAfterMs: Math.max(1, Math.trunc(config.tokenHealthStaleHours || 6)) * 60 * 60 * 1000,
+  });
+}
+
 export async function accountTokensRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { accountId?: string } }>('/api/account-tokens', async (request) => {
     const accountId = request.query.accountId ? Number.parseInt(request.query.accountId, 10) : undefined;
@@ -179,6 +212,7 @@ export async function accountTokensRoutes(app: FastifyInstance) {
           name: (body.name || '').trim() || (existing.length === 0 ? 'default' : `token-${existing.length + 1}`),
           token: tokenValue,
           tokenGroup: (body.group || '').trim() || null,
+          probeModel: normalizeNullableText(body.probeModel),
           valueStatus,
           source: body.source || 'manual',
           enabled,
@@ -468,6 +502,9 @@ export async function accountTokensRoutes(app: FastifyInstance) {
     if (body.group !== undefined) {
       updates.tokenGroup = (body.group || '').trim() || null;
     }
+    if (body.probeModel !== undefined) {
+      updates.probeModel = normalizeNullableText(body.probeModel);
+    }
 
     if (nextValueStatus === ACCOUNT_TOKEN_VALUE_STATUS_MASKED_PENDING) {
       updates.enabled = false;
@@ -501,6 +538,31 @@ export async function accountTokensRoutes(app: FastifyInstance) {
     }
 
     return { success: true, token: latest };
+  });
+
+  app.post<{ Params: { id: string } }>('/api/account-tokens/:id/health/probe', async (request, reply) => {
+    const tokenId = Number.parseInt(request.params.id, 10);
+    if (!Number.isFinite(tokenId) || tokenId <= 0) {
+      return reply.code(400).send({ success: false, message: '令牌 ID 无效' });
+    }
+    const existing = await db.select().from(schema.accountTokens).where(eq(schema.accountTokens.id, tokenId)).get();
+    if (!existing) {
+      return reply.code(404).send({ success: false, message: '令牌不存在' });
+    }
+    const owner = await db.select().from(schema.accounts).where(eq(schema.accounts.id, existing.accountId)).get();
+    if (!owner) {
+      return reply.code(404).send({ success: false, message: '账号不存在' });
+    }
+    if (isApiKeyConnection(owner)) {
+      return reply.code(400).send({ success: false, message: 'API Key 连接不支持账号令牌探测' });
+    }
+
+    const result = await probeAccountTokenHealth({ tokenId, scheduled: false });
+    return {
+      success: true,
+      result,
+      health: await loadAccountTokenHealthSummary(tokenId),
+    };
   });
 
   app.post<{ Params: { id: string } }>('/api/account-tokens/:id/default', async (request, reply) => {

@@ -66,6 +66,16 @@ describe('buildConfig', () => {
     expect(config.codexResponsesWebsocketBeta).toBe('responses_websockets=2099-01-01');
   });
 
+  it('accepts token health probe defaults from environment', () => {
+    const config = buildConfig({
+      TOKEN_HEALTH_PROBE_MODEL: ' gpt-5-mini ',
+      TOKEN_HEALTH_STALE_HOURS: '12',
+    });
+
+    expect(config.tokenHealthProbeModel).toBe('gpt-5-mini');
+    expect(config.tokenHealthStaleHours).toBe(12);
+  });
+
   it('accepts JSON request bodies larger than Fastify default 1 MiB', async () => {
     const app = Fastify(buildFastifyOptions(buildConfig({})));
     const largeText = 'a'.repeat(2 * 1024 * 1024);

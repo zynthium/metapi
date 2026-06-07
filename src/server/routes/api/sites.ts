@@ -479,6 +479,7 @@ export async function sitesRoutes(app: FastifyInstance) {
       globalWeight,
       apiEndpoints,
     } = createBody;
+    const createAnyBody = createBody as Record<string, unknown>;
     const normalizedStatus = normalizeSiteStatus(status);
     if (status !== undefined && !normalizedStatus) {
       return reply.code(400).send({ error: 'Invalid site status. Expected active or disabled.' });
@@ -565,6 +566,7 @@ export async function sitesRoutes(app: FastifyInstance) {
           isPinned: normalizedPinned ?? false,
           sortOrder: normalizedSortOrder ?? (maxSortOrder + 1),
           globalWeight: normalizedGlobalWeight ?? 1,
+          tokenHealthProbeModel: String(createAnyBody.tokenHealthProbeModel || '').trim() || null,
         }).run();
         const siteId = getInsertedRowId(siteInsert);
         if (siteId && normalizedApiEndpoints.present && normalizedApiEndpoints.apiEndpoints.length > 0) {
@@ -692,6 +694,7 @@ export async function sitesRoutes(app: FastifyInstance) {
     if (anyBody.postRefreshProbeEnabled !== undefined) updates.postRefreshProbeEnabled = anyBody.postRefreshProbeEnabled === true || anyBody.postRefreshProbeEnabled === 1;
     if (anyBody.postRefreshProbeModel !== undefined) updates.postRefreshProbeModel = String(anyBody.postRefreshProbeModel || '').trim();
     if (anyBody.postRefreshProbeScope !== undefined) updates.postRefreshProbeScope = anyBody.postRefreshProbeScope === 'all' ? 'all' : 'single';
+    if (anyBody.tokenHealthProbeModel !== undefined) updates.tokenHealthProbeModel = String(anyBody.tokenHealthProbeModel || '').trim() || null;
     if (anyBody.postRefreshProbeLatencyThresholdMs !== undefined) {
       const ms = Number(anyBody.postRefreshProbeLatencyThresholdMs);
       updates.postRefreshProbeLatencyThresholdMs = Number.isFinite(ms) && ms >= 0 ? Math.trunc(ms) : 0;

@@ -6,6 +6,8 @@ const connectionMaintenanceStagesSchema = z.record(z.string(), z.boolean());
 
 const runtimeSettingsPayloadSchema = z.object({
   modelAvailabilityProbeEnabled: z.boolean().optional(),
+  tokenHealthProbeModel: z.string().optional(),
+  tokenHealthStaleHours: z.number().optional(),
   connectionMaintenanceEnabled: z.boolean().optional(),
   connectionMaintenanceCron: z.string().optional(),
   connectionMaintenanceRetryAttempts: z.number().optional(),
@@ -96,6 +98,12 @@ function formatSettingsPayloadError(error: z.ZodError): string {
   }
   if (firstPath === 'modelAvailabilityProbeEnabled') {
     return '批量测活开关格式无效：需要 boolean';
+  }
+  if (firstPath === 'tokenHealthProbeModel') {
+    return '令牌健康探测模型格式无效：需要 string';
+  }
+  if (firstPath === 'tokenHealthStaleHours') {
+    return '令牌健康过期时间格式无效：需要 number';
   }
   if (firstPath === 'connectionMaintenanceEnabled') {
     return '连接维护开关格式无效：需要 boolean';

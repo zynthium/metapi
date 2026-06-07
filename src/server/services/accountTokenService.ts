@@ -1,8 +1,13 @@
-﻿import { and, eq, ne } from 'drizzle-orm';
+﻿import { and, eq, inArray, ne } from 'drizzle-orm';
+import { config } from '../config.js';
 import { db, schema } from '../db/index.js';
 import { getInsertedRowId } from '../db/insertHelpers.js';
 import { getCredentialModeFromExtraConfig } from './accountExtraConfig.js';
 import { getAccountGroupRatioMap } from './accountGroupRatioStore.js';
+import {
+  buildAccountTokenHealthSummary,
+  resolveAccountTokenProbeModel,
+} from './accountTokenHealthService.js';
 
 type UpstreamApiToken = {
   name?: string | null;
@@ -14,6 +19,7 @@ type UpstreamApiToken = {
 };
 
 type AccountTokenRow = typeof schema.accountTokens.$inferSelect;
+type AccountTokenHealthRow = typeof schema.accountTokenHealth.$inferSelect;
 
 export const ACCOUNT_TOKEN_VALUE_STATUS_READY = 'ready' as const;
 export const ACCOUNT_TOKEN_VALUE_STATUS_MASKED_PENDING = 'masked_pending' as const;
@@ -559,35 +565,58 @@ export async function listTokensWithRelations(accountId?: number) {
     resolvedGroupRatioByAccount.set(key, await promise);
   }
 
+  const tokenIds = rows.map((row) => row.account_tokens.id);
+  const healthRows: AccountTokenHealthRow[] = tokenIds.length > 0
+    ? await db.select()
+      .from(schema.accountTokenHealth)
+      .where(inArray(schema.accountTokenHealth.tokenId, tokenIds))
+      .all()
+    : [];
+  const healthByTokenId = new Map<number, AccountTokenHealthRow>(
+    healthRows.map((row) => [row.tokenId, row]),
+  );
+
   return rows
     .filter((row) => !isApiKeyConnection(row.accounts))
     .map((row) => {
-    const { token, tokenGroup, ...tokenMeta } = row.account_tokens;
-    const groupRatio = resolvedGroupRatioByAccount.get(`${row.sites.id}:${row.accounts.id}`);
-    const ratio = tokenGroup ? groupRatio?.[tokenGroup] : null;
-    const groupMultiplier = ratio && typeof ratio.multiplier === 'number'
-      ? ratio.multiplier
-      : null;
-    return {
-      ...tokenMeta,
-      tokenGroup,
-      valueStatus: resolveAccountTokenValueStatus(row.account_tokens),
-      tokenMasked: maskToken(token, row.sites.platform),
-      groupMultiplier,
-      groupMultiplierRefreshedAt: ratio?.refreshedAt ?? null,
-      groupMultiplierLastError: ratio?.lastError ?? null,
-      groupMultiplierStale: !!ratio?.lastError,
-      account: {
-        id: row.accounts.id,
-        username: row.accounts.username,
-        status: row.accounts.status,
-      },
-      site: {
-        id: row.sites.id,
-        name: row.sites.name,
-        url: row.sites.url,
-        platform: row.sites.platform,
-      },
-    };
+      const { token, tokenGroup, ...tokenMeta } = row.account_tokens;
+      const groupRatio = resolvedGroupRatioByAccount.get(`${row.sites.id}:${row.accounts.id}`);
+      const ratio = tokenGroup ? groupRatio?.[tokenGroup] : null;
+      const groupMultiplier = ratio && typeof ratio.multiplier === 'number'
+        ? ratio.multiplier
+        : null;
+      return {
+        ...tokenMeta,
+        tokenGroup,
+        valueStatus: resolveAccountTokenValueStatus(row.account_tokens),
+        tokenMasked: maskToken(token, row.sites.platform),
+        groupMultiplier,
+        groupMultiplierRefreshedAt: ratio?.refreshedAt ?? null,
+        groupMultiplierLastError: ratio?.lastError ?? null,
+        groupMultiplierStale: !!ratio?.lastError,
+        health: buildAccountTokenHealthSummary({
+          token: row.account_tokens,
+          accountStatus: row.accounts.status,
+          siteStatus: row.sites.status,
+          health: healthByTokenId.get(row.account_tokens.id) || null,
+          probeModel: resolveAccountTokenProbeModel({
+            tokenProbeModel: row.account_tokens.probeModel,
+            siteProbeModel: row.sites.tokenHealthProbeModel,
+            globalProbeModel: config.tokenHealthProbeModel,
+          }),
+          staleAfterMs: Math.max(1, Math.trunc(config.tokenHealthStaleHours || 6)) * 60 * 60 * 1000,
+        }),
+        account: {
+          id: row.accounts.id,
+          username: row.accounts.username,
+          status: row.accounts.status,
+        },
+        site: {
+          id: row.sites.id,
+          name: row.sites.name,
+          url: row.sites.url,
+          platform: row.sites.platform,
+        },
+      };
     });
 }

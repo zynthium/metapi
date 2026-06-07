@@ -8,6 +8,7 @@ const accountTokenCreatePayloadSchema = z.object({
   isDefault: z.boolean().optional(),
   source: z.string().optional(),
   group: z.string().optional(),
+  probeModel: z.string().optional(),
   unlimitedQuota: z.boolean().optional(),
   remainQuota: z.union([z.number(), z.string()]).optional(),
   expiredTime: z.union([z.number(), z.string()]).optional(),
@@ -25,6 +26,7 @@ const accountTokenUpdatePayloadSchema = z.object({
   name: z.string().optional(),
   token: z.string().optional(),
   group: z.string().optional(),
+  probeModel: z.string().optional(),
   enabled: z.boolean().optional(),
   isDefault: z.boolean().optional(),
   source: z.string().optional(),
@@ -66,6 +68,9 @@ function formatAccountTokenPayloadError(error: z.ZodError): string {
   }
   if (firstPath === 'group') {
     return 'Invalid group. Expected string.';
+  }
+  if (firstPath === 'probeModel') {
+    return 'Invalid probeModel. Expected string.';
   }
   if (firstPath === 'unlimitedQuota') {
     return 'Invalid unlimitedQuota. Expected boolean.';

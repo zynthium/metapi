@@ -59,6 +59,8 @@ interface RuntimeSettingsBody {
   systemProxyUrl?: string;
   payloadRules?: unknown;
   modelAvailabilityProbeEnabled?: boolean;
+  tokenHealthProbeModel?: string;
+  tokenHealthStaleHours?: number;
   codexUpstreamWebsocketEnabled?: boolean;
   responsesCompactFallbackToResponsesEnabled?: boolean;
   disableCrossProtocolFallback?: boolean;
@@ -740,6 +742,8 @@ function getRuntimeSettingsResponse(currentAdminIp = '') {
     logCleanupProgramLogsEnabled: config.logCleanupProgramLogsEnabled,
     logCleanupRetentionDays: config.logCleanupRetentionDays,
     modelAvailabilityProbeEnabled: config.modelAvailabilityProbeEnabled,
+    tokenHealthProbeModel: config.tokenHealthProbeModel,
+    tokenHealthStaleHours: config.tokenHealthStaleHours,
     codexUpstreamWebsocketEnabled: config.codexUpstreamWebsocketEnabled,
     responsesCompactFallbackToResponsesEnabled: config.responsesCompactFallbackToResponsesEnabled,
     disableCrossProtocolFallback: config.disableCrossProtocolFallback,
@@ -1293,6 +1297,28 @@ export async function settingsRoutes(app: FastifyInstance) {
       } else {
         stopModelAvailabilityProbeScheduler();
       }
+    }
+
+    if (body.tokenHealthProbeModel !== undefined) {
+      const nextValue = String(body.tokenHealthProbeModel || '').trim();
+      if (nextValue !== config.tokenHealthProbeModel) {
+        changedLabels.push('令牌健康探测模型');
+      }
+      config.tokenHealthProbeModel = nextValue;
+      upsertSetting('token_health_probe_model', nextValue);
+    }
+
+    if (body.tokenHealthStaleHours !== undefined) {
+      const staleHours = Number(body.tokenHealthStaleHours);
+      if (!Number.isFinite(staleHours) || staleHours < 1) {
+        return reply.code(400).send({ success: false, message: '令牌健康过期时间必须是大于等于 1 的整数小时' });
+      }
+      const nextValue = Math.trunc(staleHours);
+      if (nextValue !== config.tokenHealthStaleHours) {
+        changedLabels.push(`令牌健康过期时间（${config.tokenHealthStaleHours}h -> ${nextValue}h）`);
+      }
+      config.tokenHealthStaleHours = nextValue;
+      upsertSetting('token_health_stale_hours', nextValue);
     }
 
     if (body.codexUpstreamWebsocketEnabled !== undefined) {

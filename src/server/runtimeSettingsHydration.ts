@@ -54,6 +54,16 @@ export function applyRuntimeSettings(settingsMap: Map<string, string>) {
     config.modelAvailabilityProbeEnabled = modelAvailabilityProbeEnabled;
   }
 
+  const tokenHealthProbeModel = parseSettingFromMap<string>(settingsMap, 'token_health_probe_model');
+  if (typeof tokenHealthProbeModel === 'string') {
+    config.tokenHealthProbeModel = tokenHealthProbeModel.trim();
+  }
+
+  const tokenHealthStaleHours = parseSettingFromMap<number>(settingsMap, 'token_health_stale_hours');
+  if (typeof tokenHealthStaleHours === 'number' && Number.isFinite(tokenHealthStaleHours) && tokenHealthStaleHours >= 1) {
+    config.tokenHealthStaleHours = Math.trunc(tokenHealthStaleHours);
+  }
+
   const codexUpstreamWebsocketEnabled = parseSettingFromMap<boolean>(settingsMap, 'codex_upstream_websocket_enabled');
   if (typeof codexUpstreamWebsocketEnabled === 'boolean') {
     config.codexUpstreamWebsocketEnabled = codexUpstreamWebsocketEnabled;

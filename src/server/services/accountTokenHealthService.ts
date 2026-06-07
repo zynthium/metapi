@@ -1,7 +1,6 @@
 import { and, asc, eq } from 'drizzle-orm';
 import { config } from '../config.js';
 import { db, schema } from '../db/index.js';
-import { isReadyAccountToken } from './accountTokenService.js';
 import {
   probeRuntimeModel,
   type RuntimeModelProbeStatus,
@@ -75,6 +74,16 @@ function normalizeOptionalText(value: string | null | undefined): string | null 
   return trimmed || null;
 }
 
+function isMaskedTokenValue(value: string | null | undefined): boolean {
+  const normalized = String(value || '').trim();
+  return normalized.includes('*') || normalized.includes('•');
+}
+
+function isReadyAccountToken(token: Pick<AccountTokenRow, 'token' | 'valueStatus'> | null | undefined): boolean {
+  if (!token) return false;
+  return (token.valueStatus || 'ready') === 'ready' && !isMaskedTokenValue(token.token);
+}
+
 function truncateError(value: string | null | undefined): string | null {
   const normalized = normalizeOptionalText(value);
   if (!normalized) return null;
@@ -89,6 +98,15 @@ function isoFromMs(nowMs: number | null | undefined): string {
   return Number.isFinite(nowMs as number)
     ? new Date(Math.trunc(nowMs as number)).toISOString()
     : nowIso();
+}
+
+function resolveStaleAfterMs(input?: number): number {
+  if (Number.isFinite(input)) return Math.max(1, input!);
+  const configuredHours = Number((config as unknown as { tokenHealthStaleHours?: number }).tokenHealthStaleHours);
+  if (Number.isFinite(configuredHours) && configuredHours >= 1) {
+    return Math.trunc(configuredHours) * 60 * 60 * 1000;
+  }
+  return DEFAULT_TOKEN_HEALTH_STALE_AFTER_MS;
 }
 
 function statusLabel(status: AccountTokenHealthStatus): string {
@@ -204,9 +222,7 @@ export function buildAccountTokenHealthSummary(input: {
   staleAfterMs?: number;
 }): AccountTokenHealthSummary {
   const nowMs = Number.isFinite(input.nowMs) ? input.nowMs! : Date.now();
-  const staleAfterMs = Number.isFinite(input.staleAfterMs)
-    ? Math.max(1, input.staleAfterMs!)
-    : DEFAULT_TOKEN_HEALTH_STALE_AFTER_MS;
+  const staleAfterMs = resolveStaleAfterMs(input.staleAfterMs);
   const lastSuccessMs = parseTimestampMs(input.health?.lastSuccessAt);
   const lastProbeMs = parseTimestampMs(input.health?.lastProbeAt);
   const latestHealthyMs = Math.max(lastSuccessMs ?? 0, lastProbeMs ?? 0);
@@ -255,9 +271,7 @@ export async function loadAccountTokenHealthProbeTargets(input: {
   globalProbeModel?: string | null;
 } = {}): Promise<AccountTokenHealthProbeTarget[]> {
   const nowMs = Number.isFinite(input.nowMs as number) ? Math.trunc(input.nowMs as number) : Date.now();
-  const staleAfterMs = Number.isFinite(input.staleAfterMs as number)
-    ? Math.max(1, Math.trunc(input.staleAfterMs as number))
-    : DEFAULT_TOKEN_HEALTH_STALE_AFTER_MS;
+  const staleAfterMs = resolveStaleAfterMs(input.staleAfterMs);
   const limit = Number.isFinite(input.limit as number)
     ? Math.max(0, Math.trunc(input.limit as number))
     : 200;

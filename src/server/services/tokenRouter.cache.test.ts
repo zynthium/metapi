@@ -904,6 +904,78 @@ describe('TokenRouter runtime cache', () => {
     expect(fourth?.channel.id).toBe(channels[0].id);
   });
 
+  it('records real channel success and failure into account token health', async () => {
+    const site = await db.insert(schema.sites).values({
+      name: 'token-health-feedback-site',
+      url: 'https://token-health-feedback.example.com',
+      platform: 'new-api',
+      status: 'active',
+    }).returning().get();
+
+    const account = await db.insert(schema.accounts).values({
+      siteId: site.id,
+      username: 'token-health-feedback-user',
+      accessToken: 'token-health-feedback-access-token',
+      apiToken: 'token-health-feedback-api-token',
+      status: 'active',
+    }).returning().get();
+
+    const token = await db.insert(schema.accountTokens).values({
+      accountId: account.id,
+      name: 'token-health-feedback-token',
+      token: 'sk-token-health-feedback-token',
+      enabled: true,
+      isDefault: true,
+    }).returning().get();
+
+    const route = await db.insert(schema.tokenRoutes).values({
+      modelPattern: 'gpt-5.4-mini',
+      routingStrategy: 'weighted',
+      enabled: true,
+    }).returning().get();
+
+    const channel = await db.insert(schema.routeChannels).values({
+      routeId: route.id,
+      accountId: account.id,
+      tokenId: token.id,
+      priority: 0,
+      weight: 10,
+      enabled: true,
+    }).returning().get();
+
+    const router = new TokenRouter();
+    await router.recordFailure(channel.id, {
+      status: 401,
+      errorText: 'invalid token',
+      modelName: 'gpt-5.4-mini',
+    });
+
+    let health = await db.select()
+      .from(schema.accountTokenHealth)
+      .where(eq(schema.accountTokenHealth.tokenId, token.id))
+      .get();
+    expect(health).toMatchObject({
+      status: 'request_failed_pending_probe',
+      lastUsedModel: 'gpt-5.4-mini',
+      lastError: 'invalid token',
+      failureCount: 1,
+    });
+
+    await router.recordSuccess(channel.id, 120, 0.01, 'gpt-5.4-mini');
+
+    health = await db.select()
+      .from(schema.accountTokenHealth)
+      .where(eq(schema.accountTokenHealth.tokenId, token.id))
+      .get();
+    expect(health).toMatchObject({
+      status: 'healthy',
+      lastUsedModel: 'gpt-5.4-mini',
+      lastError: null,
+      failureCount: 0,
+      nextProbeAt: null,
+    });
+  });
+
   it('applies staged cooldowns for round robin after every three consecutive failures', async () => {
     const site = await db.insert(schema.sites).values({
       name: 'round-robin-cooldown-site',

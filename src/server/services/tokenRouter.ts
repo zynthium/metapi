@@ -15,6 +15,10 @@ import {
 } from './routeRoutingStrategy.js';
 import { type DownstreamRoutingPolicy, EMPTY_DOWNSTREAM_ROUTING_POLICY } from './downstreamPolicyTypes.js';
 import { isUsableAccountToken } from './accountTokenService.js';
+import {
+  recordAccountTokenRequestFailure,
+  recordAccountTokenRequestSuccess,
+} from './accountTokenHealthService.js';
 import { getOauthInfoFromAccount } from './oauth/oauthAccount.js';
 import { parseCodexQuotaResetHint } from './oauth/quota.js';
 import {
@@ -2638,6 +2642,13 @@ export class TokenRouter {
     const nextSuccessCount = (ch.successCount ?? 0) + 1;
     const nextTotalLatencyMs = (ch.totalLatencyMs ?? 0) + latencyMs;
     const nextTotalCost = (ch.totalCost ?? 0) + cost;
+    if (typeof ch.tokenId === 'number' && ch.tokenId > 0) {
+      await recordAccountTokenRequestSuccess({
+        tokenId: ch.tokenId,
+        modelName,
+        at: nowIso,
+      });
+    }
     if (typeof ch.oauthRouteUnitId === 'number' && ch.oauthRouteUnitId > 0) {
       const targetAccountId = Number.isFinite(actualAccountId) && (actualAccountId ?? 0) > 0
         ? Math.trunc(actualAccountId!)
@@ -2888,6 +2899,14 @@ export class TokenRouter {
     const normalizedContext: SiteRuntimeFailureContext = typeof context === 'string'
       ? { modelName: context }
       : (context ?? {});
+    if (typeof ch.tokenId === 'number' && ch.tokenId > 0) {
+      await recordAccountTokenRequestFailure({
+        tokenId: ch.tokenId,
+        modelName: normalizedContext.modelName,
+        error: normalizedContext.errorText,
+        at: nowIso,
+      });
+    }
     if (typeof ch.oauthRouteUnitId === 'number' && ch.oauthRouteUnitId > 0) {
       const targetAccountId = Number.isFinite(actualAccountId) && (actualAccountId ?? 0) > 0
         ? Math.trunc(actualAccountId!)

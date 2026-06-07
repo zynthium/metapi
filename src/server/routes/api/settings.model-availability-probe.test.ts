@@ -45,6 +45,8 @@ describe('settings model availability probe runtime setting', () => {
   beforeEach(async () => {
     await db.delete(schema.settings).run();
     config.modelAvailabilityProbeEnabled = false;
+    config.tokenHealthProbeModel = '';
+    config.tokenHealthStaleHours = 6;
     startModelAvailabilityProbeSchedulerMock.mockReset();
     stopModelAvailabilityProbeSchedulerMock.mockReset();
   });
@@ -102,5 +104,41 @@ describe('settings model availability probe runtime setting', () => {
 
     const saved = await db.select().from(schema.settings).where(eq(schema.settings.key, 'model_availability_probe_enabled')).get();
     expect(saved?.value).toBe(JSON.stringify(false));
+  });
+
+  it('persists token health probe runtime defaults', async () => {
+    const updateResponse = await app.inject({
+      method: 'PUT',
+      url: '/api/settings/runtime',
+      payload: {
+        tokenHealthProbeModel: ' gpt-5-mini ',
+        tokenHealthStaleHours: 12,
+      },
+    });
+
+    expect(updateResponse.statusCode).toBe(200);
+    const updated = updateResponse.json() as {
+      tokenHealthProbeModel?: string;
+      tokenHealthStaleHours?: number;
+    };
+    expect(updated.tokenHealthProbeModel).toBe('gpt-5-mini');
+    expect(updated.tokenHealthStaleHours).toBe(12);
+    expect(config.tokenHealthProbeModel).toBe('gpt-5-mini');
+    expect(config.tokenHealthStaleHours).toBe(12);
+
+    const savedModel = await db.select().from(schema.settings).where(eq(schema.settings.key, 'token_health_probe_model')).get();
+    expect(savedModel?.value).toBe(JSON.stringify('gpt-5-mini'));
+    const savedStaleHours = await db.select().from(schema.settings).where(eq(schema.settings.key, 'token_health_stale_hours')).get();
+    expect(savedStaleHours?.value).toBe(JSON.stringify(12));
+
+    const getResponse = await app.inject({
+      method: 'GET',
+      url: '/api/settings/runtime',
+    });
+    expect(getResponse.statusCode).toBe(200);
+    expect(getResponse.json()).toMatchObject({
+      tokenHealthProbeModel: 'gpt-5-mini',
+      tokenHealthStaleHours: 12,
+    });
   });
 });
