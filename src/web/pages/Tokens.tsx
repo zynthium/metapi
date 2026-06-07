@@ -20,6 +20,7 @@ import { clearFocusParams, readFocusTokenId } from './helpers/navigationFocus.js
 import { formatMultiplier } from './helpers/multiplierFormat.js';
 import { shouldIgnoreRowSelectionClick } from './helpers/rowSelection.js';
 import { tr } from '../i18n.js';
+import MaintenanceCountdown from '../components/MaintenanceCountdown.js';
 
 type SyncStatus = 'success' | 'skipped' | 'failed';
 type TokensPanelProps = {
@@ -159,6 +160,7 @@ function renderTokenHealth(token: any) {
           {health.lastError}
         </span>
       ) : null}
+      <MaintenanceCountdown schedule={token?.checkSchedule} />
     </div>
   );
 }

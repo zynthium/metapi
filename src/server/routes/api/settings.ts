@@ -51,6 +51,7 @@ import {
 } from '../../services/modelAvailabilityProbeService.js';
 import { parsePayloadRulesConfigInput } from '../../services/payloadRules.js';
 import { normalizeConnectionMaintenanceConfig } from '../../services/connectionMaintenanceConfig.js';
+import { getConnectionMaintenanceScheduleContext } from '../../services/maintenanceCheckScheduleService.js';
 
 type RoutingWeights = typeof config.routingWeights;
 
@@ -726,6 +727,7 @@ function applyImportedSettingToRuntime(key: string, value: unknown) {
 }
 
 function getRuntimeSettingsResponse(currentAdminIp = '') {
+  const connectionMaintenanceSchedule = getConnectionMaintenanceScheduleContext();
   return {
     checkinCron: config.checkinCron,
     checkinScheduleMode: config.checkinScheduleMode,
@@ -737,6 +739,7 @@ function getRuntimeSettingsResponse(currentAdminIp = '') {
     connectionMaintenanceAttemptTimeoutSec: config.connectionMaintenanceAttemptTimeoutSec,
     connectionMaintenanceConcurrency: config.connectionMaintenanceConcurrency,
     connectionMaintenanceStages: config.connectionMaintenanceStages,
+    connectionMaintenanceNextRunAt: connectionMaintenanceSchedule.nextMaintenanceAt,
     logCleanupCron: config.logCleanupCron,
     logCleanupUsageLogsEnabled: config.logCleanupUsageLogsEnabled,
     logCleanupProgramLogsEnabled: config.logCleanupProgramLogsEnabled,

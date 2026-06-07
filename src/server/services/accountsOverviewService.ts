@@ -17,6 +17,11 @@ import {
 } from "./snapshotCacheService.js";
 import { estimateRewardWithTodayIncomeFallback } from "./todayIncomeRewardService.js";
 import { createAdminSnapshotPersistence } from "./adminSnapshotStore.js";
+import {
+  buildStageCheckSchedule,
+  getConnectionMaintenanceScheduleContext,
+  type MaintenanceCheckSchedule,
+} from "./maintenanceCheckScheduleService.js";
 
 export type AccountCapabilities = {
   canCheckin: boolean;
@@ -31,6 +36,7 @@ export type AccountOverviewRow = typeof schema.accounts.$inferSelect & {
   todaySpend: number;
   todayReward: number;
   runtimeHealth: RuntimeHealthInfo;
+  checkSchedule: MaintenanceCheckSchedule;
 };
 
 export type AccountsSnapshotPayload = {
@@ -110,6 +116,7 @@ async function loadAccountsSnapshotPayload(): Promise<AccountsSnapshotPayload> {
   ]);
 
   const { localDay, startUtc, endUtc } = getLocalDayRangeUtc();
+  const scheduleContext = getConnectionMaintenanceScheduleContext();
 
   const [todaySpendRows, modelCountRows, todayCheckins] = await Promise.all([
     db
@@ -184,6 +191,10 @@ async function loadAccountsSnapshotPayload(): Promise<AccountsSnapshotPayload> {
     accounts: rows.map((row) => {
       const credentialMode = resolveStoredCredentialMode(row.accounts);
       const capabilities = buildCapabilitiesForAccount(row.accounts);
+      const activeForRuntimeHealth =
+        (row.accounts.status || "active") === "active" &&
+        (row.sites.status || "active") === "active" &&
+        capabilities.canRefreshBalance;
       return {
         ...row.accounts,
         site: row.sites,
@@ -209,6 +220,11 @@ async function loadAccountsSnapshotPayload(): Promise<AccountsSnapshotPayload> {
           extraConfig: row.accounts.extraConfig,
           sessionCapable: capabilities.canRefreshBalance,
           hasDiscoveredModels: (modelCountByAccount[row.accounts.id] || 0) > 0,
+        }),
+        checkSchedule: buildStageCheckSchedule({
+          context: scheduleContext,
+          stage: "accountHealth",
+          subjectEnabled: activeForRuntimeHealth,
         }),
       };
     }),

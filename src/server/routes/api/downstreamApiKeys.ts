@@ -22,6 +22,10 @@ import {
   parseDownstreamApiKeyBatchPayload,
   parseDownstreamApiKeyPayload,
 } from '../../contracts/downstreamApiKeyRoutePayloads.js';
+import {
+  buildMaintenanceCheckSchedule,
+  getConnectionMaintenanceScheduleContext,
+} from '../../services/maintenanceCheckScheduleService.js';
 
 function parseRouteId(raw: string): number | null {
   const id = Number.parseInt(raw, 10);
@@ -465,9 +469,19 @@ export async function downstreamApiKeysRoutes(app: FastifyInstance) {
   });
 
   app.get('/api/downstream-keys', async () => {
+    const scheduleContext = getConnectionMaintenanceScheduleContext();
+    const items = await listDownstreamApiKeys();
     return {
       success: true,
-      items: await listDownstreamApiKeys(),
+      items: items.map((item) => ({
+        ...item,
+        checkSchedule: buildMaintenanceCheckSchedule({
+          maintenanceEnabled: scheduleContext.maintenanceEnabled,
+          stageEnabled: true,
+          subjectEnabled: item.enabled,
+          nextMaintenanceAt: scheduleContext.nextMaintenanceAt,
+        }),
+      })),
     };
   });
 

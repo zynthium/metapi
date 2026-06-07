@@ -29,6 +29,7 @@ import { clearAuthSession } from '../authSession.js';
 import { clearAppInstallationState } from '../appLocalState.js';
 import { tr } from '../i18n.js';
 import { generateDownstreamSkKey } from './helpers/generateDownstreamSkKey.js';
+import MaintenanceCountdown from '../components/MaintenanceCountdown.js';
 
 const PROXY_TOKEN_PREFIX = 'sk-';
 const FACTORY_RESET_ADMIN_TOKEN = 'change-me-admin-token';
@@ -89,6 +90,7 @@ type RuntimeSettings = {
   connectionMaintenanceAttemptTimeoutSec: number;
   connectionMaintenanceConcurrency: number;
   connectionMaintenanceStages: Record<string, boolean>;
+  connectionMaintenanceNextRunAt: string | null;
   tokenHealthProbeModel: string;
   tokenHealthStaleHours: number;
   logCleanupCron: string;
@@ -379,6 +381,7 @@ export default function Settings() {
     connectionMaintenanceAttemptTimeoutSec: 15,
     connectionMaintenanceConcurrency: 3,
     connectionMaintenanceStages: DEFAULT_CONNECTION_MAINTENANCE_STAGES,
+    connectionMaintenanceNextRunAt: null,
     tokenHealthProbeModel: '',
     tokenHealthStaleHours: 6,
     logCleanupCron: '0 6 * * *',
@@ -713,6 +716,9 @@ export default function Settings() {
           ...DEFAULT_CONNECTION_MAINTENANCE_STAGES,
           ...(runtimeInfo.connectionMaintenanceStages || {}),
         },
+        connectionMaintenanceNextRunAt: typeof runtimeInfo.connectionMaintenanceNextRunAt === 'string'
+          ? runtimeInfo.connectionMaintenanceNextRunAt
+          : null,
         tokenHealthProbeModel: typeof runtimeInfo.tokenHealthProbeModel === 'string'
           ? runtimeInfo.tokenHealthProbeModel
           : '',
@@ -833,7 +839,7 @@ export default function Settings() {
   const saveSchedule = async () => {
     setSavingSchedule(true);
     try {
-      await api.updateRuntimeSettings({
+      const updated = await api.updateRuntimeSettings({
         checkinCron: runtime.checkinCron,
         checkinScheduleMode: runtime.checkinScheduleMode,
         checkinIntervalHours: runtime.checkinIntervalHours,
@@ -851,6 +857,12 @@ export default function Settings() {
         logCleanupProgramLogsEnabled: runtime.logCleanupProgramLogsEnabled,
         logCleanupRetentionDays: runtime.logCleanupRetentionDays,
       });
+      if (typeof updated?.connectionMaintenanceNextRunAt === 'string' || updated?.connectionMaintenanceNextRunAt === null) {
+        setRuntime((prev) => ({
+          ...prev,
+          connectionMaintenanceNextRunAt: updated.connectionMaintenanceNextRunAt ?? null,
+        }));
+      }
       toast.success('定时任务设置已保存');
     } catch (err: any) {
       toast.error(err?.message || '保存失败');
@@ -1454,7 +1466,19 @@ export default function Settings() {
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>连接维护</div>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <div style={{ fontWeight: 600, fontSize: 13 }}>连接维护</div>
+                <MaintenanceCountdown
+                  prefix="下次维护"
+                  schedule={{
+                    enabled: runtime.connectionMaintenanceEnabled && !!runtime.connectionMaintenanceNextRunAt,
+                    nextCheckAt: runtime.connectionMaintenanceNextRunAt,
+                    reason: runtime.connectionMaintenanceEnabled
+                      ? (runtime.connectionMaintenanceNextRunAt ? null : 'not_scheduled')
+                      : 'maintenance_disabled',
+                  }}
+                />
+              </div>
               <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--color-text-secondary)' }}>
                 <input
                   type="checkbox"

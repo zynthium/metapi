@@ -27,6 +27,7 @@ import {
   type Range,
   type SummaryItem,
 } from './downstream-keys/shared.js';
+import MaintenanceCountdown, { type MaintenanceCheckSchedule } from '../components/MaintenanceCountdown.js';
 
 type Status = 'all' | 'enabled' | 'disabled';
 
@@ -50,10 +51,12 @@ type DownstreamApiKeyItem = {
   excludedSiteIds: number[];
   excludedCredentialRefs: DownstreamExcludedCredentialRef[];
   lastUsedAt: string | null;
+  checkSchedule?: MaintenanceCheckSchedule | null;
 };
 
 type ManagedItem = SummaryItem & {
   key?: string;
+  checkSchedule?: MaintenanceCheckSchedule | null;
 };
 
 type RouteSelectorItem = {
@@ -629,6 +632,7 @@ export default function DownstreamKeys() {
         excludedSiteIds: raw?.excludedSiteIds ?? item.excludedSiteIds,
         excludedCredentialRefs: raw?.excludedCredentialRefs ?? item.excludedCredentialRefs,
         lastUsedAt: raw?.lastUsedAt ?? item.lastUsedAt,
+        checkSchedule: raw?.checkSchedule ?? null,
       };
     })
   ), [rawItemMap, summaryItems]);
@@ -1180,6 +1184,7 @@ export default function DownstreamKeys() {
                   <MobileField label="模型" value={summarizeModelLimit(row.supportedModels || [])} stacked />
                   <MobileField label="群组" value={summarizeRouteLimit(row.allowedRouteIds || [], routeMap)} stacked />
                   <MobileField label="倍率" value={summarizeSiteWeightMultipliers(row.siteWeightMultipliers || {})} stacked />
+                  <MobileField label="检测" value={<MaintenanceCountdown schedule={row.checkSchedule} />} />
                   <MobileField label="额度" value={`${row.maxRequests == null ? '不限' : row.maxRequests.toLocaleString()} / ${row.maxCost == null ? '成本不限' : formatMoney(row.maxCost)}`} stacked />
                   <MobileField label="用量" value={`${(row.rangeUsage?.totalRequests || 0).toLocaleString()} 请求 · ${formatCompactTokens(row.rangeUsage?.totalTokens || 0)}`} stacked />
                   <MobileField label="最近使用" value={formatIso(row.lastUsedAt)} stacked />
@@ -1215,9 +1220,10 @@ export default function DownstreamKeys() {
                         <input type="checkbox" checked={checked} onChange={(e) => toggleSelection(row.id, e.target.checked)} />
                       </td>
                       <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
                           <strong style={{ color: 'var(--color-text-primary)' }}>{row.name}</strong>
                           <StatusBadge enabled={row.enabled} />
+                          <MaintenanceCountdown schedule={row.checkSchedule} />
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 4 }}>
                           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--color-text-muted)' }}>{row.keyMasked}</span>

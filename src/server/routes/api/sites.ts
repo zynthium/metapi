@@ -19,6 +19,10 @@ import { getSiteInitializationPreset } from '../../../shared/siteInitializationP
 import { normalizeSiteApiEndpointBaseUrl } from '../../services/siteApiEndpointService.js';
 import { analyzePrimarySiteUrl } from '../../../shared/sitePrimaryUrl.js';
 import { probeSiteModels } from '../../services/modelService.js';
+import {
+  buildStageCheckSchedule,
+  getConnectionMaintenanceScheduleContext,
+} from '../../services/maintenanceCheckScheduleService.js';
 
 function sseWrite(raw: import('http').ServerResponse, event: string, data: unknown) {
   try { raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* ignore */ }
@@ -252,7 +256,9 @@ async function loadSiteApiEndpointsBySiteIds(siteIds: number[]) {
   return bySiteId;
 }
 
-async function attachSiteApiEndpoints<T extends { id: number }>(siteRows: T[]) {
+async function attachSiteApiEndpoints<T extends { id: number }>(
+  siteRows: T[],
+): Promise<Array<T & { apiEndpoints: Array<typeof schema.siteApiEndpoints.$inferSelect> }>> {
   const bySiteId = await loadSiteApiEndpointsBySiteIds(siteRows.map((row) => row.id));
   return siteRows.map((row) => ({
     ...row,
@@ -435,8 +441,9 @@ export async function sitesRoutes(app: FastifyInstance) {
 
   // List all sites
   app.get('/api/sites', async () => {
-    const siteRows = await db.select().from(schema.sites).all();
-    const siteRowsWithApiEndpoints = await attachSiteApiEndpoints(siteRows);
+    const siteRows: Array<typeof schema.sites.$inferSelect> = await db.select().from(schema.sites).all();
+    const siteRowsWithApiEndpoints = await attachSiteApiEndpoints<typeof schema.sites.$inferSelect>(siteRows);
+    const scheduleContext = getConnectionMaintenanceScheduleContext();
     const accountRows = await db.select({
       siteId: schema.accounts.siteId,
       balance: schema.accounts.balance,
@@ -454,6 +461,11 @@ export async function sitesRoutes(app: FastifyInstance) {
       ...site,
       totalBalance: Math.round((totalBalanceBySiteId[site.id] || 0) * 1_000_000) / 1_000_000,
       subscriptionSummary: subscriptionBySiteId[site.id] || null,
+      checkSchedule: buildStageCheckSchedule({
+        context: scheduleContext,
+        stage: 'siteAccess',
+        subjectEnabled: (site.status || 'active') === 'active',
+      }),
     }));
   });
 

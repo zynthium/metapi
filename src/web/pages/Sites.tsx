@@ -24,6 +24,7 @@ import { tr } from '../i18n.js';
 import { buildCustomReorderUpdates, sortItemsForDisplay, type SortMode } from './helpers/listSorting.js';
 import { shouldIgnoreRowSelectionClick } from './helpers/rowSelection.js';
 import { resolveInitialConnectionSegment } from './helpers/defaultConnectionSegment.js';
+import MaintenanceCountdown, { type MaintenanceCheckSchedule } from '../components/MaintenanceCountdown.js';
 import {
   buildSiteSaveAction,
   emptySiteApiEndpoint,
@@ -74,6 +75,7 @@ type SiteRow = {
   postRefreshProbeScope?: string | null;
   postRefreshProbeLatencyThresholdMs?: number | null;
   tokenHealthProbeModel?: string | null;
+  checkSchedule?: MaintenanceCheckSchedule | null;
   apiEndpoints?: Array<{
     id?: number;
     url: string;
@@ -2043,6 +2045,10 @@ export default function Sites() {
                       )}
                     />
                     <MobileField
+                      label="检测"
+                      value={<MaintenanceCountdown schedule={site.checkSchedule} />}
+                    />
+                    <MobileField
                       label="平台"
                       value={(
                         <span className={`badge ${platformColors[site.platform || ''] || 'badge-muted'}`} style={{ fontSize: 11 }}>
@@ -2275,9 +2281,12 @@ export default function Sites() {
                       />
                     </td>
                     <td>
-                      <span className={`badge ${site.status === 'disabled' ? 'badge-muted' : 'badge-success'}`} style={{ fontSize: 11 }}>
-                        {site.status === 'disabled' ? '禁用' : '启用'}
-                      </span>
+                      <div style={{ display: 'inline-flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
+                        <span className={`badge ${site.status === 'disabled' ? 'badge-muted' : 'badge-success'}`} style={{ fontSize: 11 }}>
+                          {site.status === 'disabled' ? '禁用' : '启用'}
+                        </span>
+                        <MaintenanceCountdown schedule={site.checkSchedule} />
+                      </div>
                     </td>
                     <td>
                       <span className={`badge ${site.useSystemProxy ? 'badge-info' : 'badge-muted'}`} style={{ fontSize: 11 }}>

@@ -8,6 +8,11 @@ import {
   buildAccountTokenHealthSummary,
   resolveAccountTokenProbeModel,
 } from './accountTokenHealthService.js';
+import {
+  buildStageCheckSchedule,
+  getConnectionMaintenanceScheduleContext,
+  resolveTokenHealthNextCheckAt,
+} from './maintenanceCheckScheduleService.js';
 
 type UpstreamApiToken = {
   name?: string | null;
@@ -575,6 +580,7 @@ export async function listTokensWithRelations(accountId?: number) {
   const healthByTokenId = new Map<number, AccountTokenHealthRow>(
     healthRows.map((row) => [row.tokenId, row]),
   );
+  const scheduleContext = getConnectionMaintenanceScheduleContext();
   const modelRows = tokenIds.length > 0
     ? await db.select()
       .from(schema.tokenModelAvailability)
@@ -602,10 +608,17 @@ export async function listTokensWithRelations(accountId?: number) {
       const groupMultiplier = ratio && typeof ratio.multiplier === 'number'
         ? ratio.multiplier
         : null;
+      const valueStatus = resolveAccountTokenValueStatus(row.account_tokens);
+      const tokenHealth = healthByTokenId.get(row.account_tokens.id) || null;
+      const activeForTokenHealth =
+        row.account_tokens.enabled === true
+        && valueStatus === ACCOUNT_TOKEN_VALUE_STATUS_READY
+        && (row.accounts.status || 'active') === 'active'
+        && (row.sites.status || 'active') === 'active';
       return {
         ...tokenMeta,
         tokenGroup,
-        valueStatus: resolveAccountTokenValueStatus(row.account_tokens),
+        valueStatus,
         tokenMasked: maskToken(token, row.sites.platform),
         groupMultiplier,
         groupMultiplierRefreshedAt: ratio?.refreshedAt ?? null,
@@ -616,13 +629,22 @@ export async function listTokensWithRelations(accountId?: number) {
           token: row.account_tokens,
           accountStatus: row.accounts.status,
           siteStatus: row.sites.status,
-          health: healthByTokenId.get(row.account_tokens.id) || null,
+          health: tokenHealth,
           probeModel: resolveAccountTokenProbeModel({
             tokenProbeModel: row.account_tokens.probeModel,
             siteProbeModel: row.sites.tokenHealthProbeModel,
             globalProbeModel: config.tokenHealthProbeModel,
           }),
           staleAfterMs: Math.max(1, Math.trunc(config.tokenHealthStaleHours || 6)) * 60 * 60 * 1000,
+        }),
+        checkSchedule: buildStageCheckSchedule({
+          context: scheduleContext,
+          stage: 'tokenHealth',
+          subjectEnabled: activeForTokenHealth,
+          nextCheckAt: resolveTokenHealthNextCheckAt({
+            tokenNextProbeAt: tokenHealth?.nextProbeAt ?? null,
+            nextMaintenanceAt: scheduleContext.nextMaintenanceAt,
+          }),
         }),
         account: {
           id: row.accounts.id,
