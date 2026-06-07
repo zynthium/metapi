@@ -27,6 +27,7 @@ const TABLES_WITH_NUMERIC_ID = new Set([
   'sites',
   'accounts',
   'account_tokens',
+  'account_token_health',
   'account_group_ratios',
   'checkin_logs',
   'model_availability',
@@ -209,6 +210,9 @@ function ensureTokenManagementSchema() {
   if (!tableColumnExists('account_tokens', 'upstream_created_at')) {
     execSqliteLegacyCompat('ALTER TABLE account_tokens ADD COLUMN upstream_created_at text;');
   }
+  if (!tableColumnExists('account_tokens', 'probe_model')) {
+    execSqliteLegacyCompat('ALTER TABLE account_tokens ADD COLUMN probe_model text;');
+  }
   if (!tableIndexExists('account_tokens_account_upstream_token_idx')) {
     execSqliteLegacyCompat(`
       CREATE INDEX IF NOT EXISTS account_tokens_account_upstream_token_idx
@@ -255,6 +259,45 @@ function ensureTokenManagementSchema() {
   execSqliteLegacyCompat(`
     CREATE UNIQUE INDEX IF NOT EXISTS token_model_availability_token_model_unique
     ON token_model_availability(token_id, model_name);
+  `);
+}
+
+function ensureAccountTokenHealthSchema() {
+  if (tableExists('sites') && !tableColumnExists('sites', 'token_health_probe_model')) {
+    execSqliteLegacyCompat('ALTER TABLE sites ADD COLUMN token_health_probe_model text;');
+  }
+
+  if (!tableExists('account_tokens')) {
+    return;
+  }
+
+  execSqliteLegacyCompat(`
+    CREATE TABLE IF NOT EXISTS account_token_health (
+      id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+      token_id integer NOT NULL REFERENCES account_tokens(id) ON DELETE cascade,
+      status text NOT NULL DEFAULT 'unknown',
+      last_success_at text,
+      last_failure_at text,
+      last_probe_at text,
+      last_probe_model text,
+      last_used_model text,
+      last_error text,
+      failure_count integer NOT NULL DEFAULT 0,
+      next_probe_at text,
+      updated_at text DEFAULT (datetime('now'))
+    );
+  `);
+  execSqliteLegacyCompat(`
+    CREATE UNIQUE INDEX IF NOT EXISTS account_token_health_token_unique
+    ON account_token_health(token_id);
+  `);
+  execSqliteLegacyCompat(`
+    CREATE INDEX IF NOT EXISTS account_token_health_status_idx
+    ON account_token_health(status);
+  `);
+  execSqliteLegacyCompat(`
+    CREATE INDEX IF NOT EXISTS account_token_health_next_probe_idx
+    ON account_token_health(next_probe_at);
   `);
 }
 
@@ -1395,6 +1438,7 @@ function initSqliteDb() {
   sqlite.pragma('foreign_keys = ON');
 
   ensureTokenManagementSchema();
+  ensureAccountTokenHealthSchema();
   ensureSiteStatusSchema();
   ensureSiteProxySchema();
   ensureSiteUseSystemProxySchema();

@@ -19,6 +19,7 @@ export const sites = sqliteTable('sites', {
   postRefreshProbeModel: text('post_refresh_probe_model').default(''),
   postRefreshProbeScope: text('post_refresh_probe_scope').default('single'),
   postRefreshProbeLatencyThresholdMs: integer('post_refresh_probe_latency_threshold_ms').default(0),
+  tokenHealthProbeModel: text('token_health_probe_model'),
   createdAt: text('created_at').default(sql`(datetime('now'))`),
   updatedAt: text('updated_at').default(sql`(datetime('now'))`),
 }, (table) => ({
@@ -94,6 +95,7 @@ export const accountTokens = sqliteTable('account_tokens', {
   valueStatus: text('value_status').notNull().default('ready'),
   upstreamTokenId: text('upstream_token_id'),
   upstreamCreatedAt: text('upstream_created_at'),
+  probeModel: text('probe_model'),
   source: text('source').default('manual'), // 'manual' | 'sync' | 'legacy'
   enabled: integer('enabled', { mode: 'boolean' }).default(true),
   isDefault: integer('is_default', { mode: 'boolean' }).default(false),
@@ -104,6 +106,25 @@ export const accountTokens = sqliteTable('account_tokens', {
   accountEnabledIdx: index('account_tokens_account_enabled_idx').on(table.accountId, table.enabled),
   accountUpstreamTokenIdx: index('account_tokens_account_upstream_token_idx').on(table.accountId, table.upstreamTokenId),
   enabledIdx: index('account_tokens_enabled_idx').on(table.enabled),
+}));
+
+export const accountTokenHealth = sqliteTable('account_token_health', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  tokenId: integer('token_id').notNull().references(() => accountTokens.id, { onDelete: 'cascade' }),
+  status: text('status').notNull().default('unknown'),
+  lastSuccessAt: text('last_success_at'),
+  lastFailureAt: text('last_failure_at'),
+  lastProbeAt: text('last_probe_at'),
+  lastProbeModel: text('last_probe_model'),
+  lastUsedModel: text('last_used_model'),
+  lastError: text('last_error'),
+  failureCount: integer('failure_count').notNull().default(0),
+  nextProbeAt: text('next_probe_at'),
+  updatedAt: text('updated_at').default(sql`(datetime('now'))`),
+}, (table) => ({
+  tokenUnique: uniqueIndex('account_token_health_token_unique').on(table.tokenId),
+  statusIdx: index('account_token_health_status_idx').on(table.status),
+  nextProbeIdx: index('account_token_health_next_probe_idx').on(table.nextProbeAt),
 }));
 
 export const accountGroupRatios = sqliteTable('account_group_ratios', {

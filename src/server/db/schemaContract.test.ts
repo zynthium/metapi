@@ -24,6 +24,27 @@ describe('schema contract generation', () => {
       logicalType: 'datetime',
       notNull: false,
     });
+    expect(contract.tables.account_tokens.columns.probe_model).toMatchObject({
+      logicalType: 'text',
+      notNull: false,
+    });
+    expect(contract.tables.sites.columns.token_health_probe_model).toMatchObject({
+      logicalType: 'text',
+      notNull: false,
+    });
+    expect(contract.tables.account_token_health.columns.token_id).toBeDefined();
+    expect(contract.tables.account_token_health.columns.status).toMatchObject({
+      logicalType: 'text',
+      notNull: true,
+      defaultValue: "'unknown'",
+    });
+    expect(contract.tables.account_token_health.columns.last_success_at).toBeDefined();
+    expect(contract.tables.account_token_health.columns.last_failure_at).toBeDefined();
+    expect(contract.tables.account_token_health.columns.failure_count).toMatchObject({
+      logicalType: 'integer',
+      notNull: true,
+      defaultValue: '0',
+    });
     expect(contract.tables.site_disabled_models).toBeDefined();
     expect(contract.tables.downstream_api_keys).toBeDefined();
     expect(contract.tables.proxy_files).toBeDefined();
@@ -59,6 +80,29 @@ describe('schema contract generation', () => {
         unique: false,
       }),
     );
+    expect(contract.indexes).toContainEqual(
+      expect.objectContaining({
+        name: 'account_token_health_status_idx',
+        table: 'account_token_health',
+        columns: ['status'],
+        unique: false,
+      }),
+    );
+    expect(contract.indexes).toContainEqual(
+      expect.objectContaining({
+        name: 'account_token_health_next_probe_idx',
+        table: 'account_token_health',
+        columns: ['next_probe_at'],
+        unique: false,
+      }),
+    );
+    expect(contract.uniques).toContainEqual(
+      expect.objectContaining({
+        name: 'account_token_health_token_unique',
+        table: 'account_token_health',
+        columns: ['token_id'],
+      }),
+    );
     expect(contract.uniques).toContainEqual(
       expect.objectContaining({
         name: 'site_disabled_models_site_model_unique',
@@ -84,6 +128,14 @@ describe('schema contract generation', () => {
     expect(contract.foreignKeys).toContainEqual(
       expect.objectContaining({
         table: 'route_channels',
+        columns: ['token_id'],
+        referencedTable: 'account_tokens',
+        referencedColumns: ['id'],
+      }),
+    );
+    expect(contract.foreignKeys).toContainEqual(
+      expect.objectContaining({
+        table: 'account_token_health',
         columns: ['token_id'],
         referencedTable: 'account_tokens',
         referencedColumns: ['id'],

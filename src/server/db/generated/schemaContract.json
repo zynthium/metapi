@@ -64,6 +64,82 @@
         }
       }
     },
+    "account_token_health": {
+      "columns": {
+        "id": {
+          "logicalType": "integer",
+          "notNull": true,
+          "defaultValue": null,
+          "primaryKey": true
+        },
+        "token_id": {
+          "logicalType": "integer",
+          "notNull": true,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "status": {
+          "logicalType": "text",
+          "notNull": true,
+          "defaultValue": "'unknown'",
+          "primaryKey": false
+        },
+        "last_success_at": {
+          "logicalType": "datetime",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "last_failure_at": {
+          "logicalType": "datetime",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "last_probe_at": {
+          "logicalType": "datetime",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "last_probe_model": {
+          "logicalType": "text",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "last_used_model": {
+          "logicalType": "text",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "last_error": {
+          "logicalType": "text",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "failure_count": {
+          "logicalType": "integer",
+          "notNull": true,
+          "defaultValue": "0",
+          "primaryKey": false
+        },
+        "next_probe_at": {
+          "logicalType": "datetime",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "updated_at": {
+          "logicalType": "datetime",
+          "notNull": false,
+          "defaultValue": "datetime('now')",
+          "primaryKey": false
+        }
+      }
+    },
     "account_tokens": {
       "columns": {
         "id": {
@@ -140,6 +216,12 @@
         },
         "upstream_created_at": {
           "logicalType": "datetime",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "probe_model": {
+          "logicalType": "text",
           "notNull": false,
           "defaultValue": null,
           "primaryKey": false
@@ -2195,6 +2277,12 @@
           "notNull": false,
           "defaultValue": "0",
           "primaryKey": false
+        },
+        "token_health_probe_model": {
+          "logicalType": "text",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
         }
       }
     },
@@ -2343,6 +2431,30 @@
         "group_name"
       ],
       "unique": false
+    },
+    {
+      "name": "account_token_health_next_probe_idx",
+      "table": "account_token_health",
+      "columns": [
+        "next_probe_at"
+      ],
+      "unique": false
+    },
+    {
+      "name": "account_token_health_status_idx",
+      "table": "account_token_health",
+      "columns": [
+        "status"
+      ],
+      "unique": false
+    },
+    {
+      "name": "account_token_health_token_unique",
+      "table": "account_token_health",
+      "columns": [
+        "token_id"
+      ],
+      "unique": true
     },
     {
       "name": "account_tokens_account_enabled_idx",
@@ -3081,6 +3193,13 @@
       ]
     },
     {
+      "name": "account_token_health_token_unique",
+      "table": "account_token_health",
+      "columns": [
+        "token_id"
+      ]
+    },
+    {
       "name": "admin_snapshots_namespace_key_unique",
       "table": "admin_snapshots",
       "columns": [
@@ -3232,6 +3351,17 @@
         "site_id"
       ],
       "referencedTable": "sites",
+      "referencedColumns": [
+        "id"
+      ],
+      "onDelete": "CASCADE"
+    },
+    {
+      "table": "account_token_health",
+      "columns": [
+        "token_id"
+      ],
+      "referencedTable": "account_tokens",
       "referencedColumns": [
         "id"
       ],
