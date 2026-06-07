@@ -231,6 +231,15 @@ export class Sub2ApiAdapter extends BasePlatformAdapter {
     return this.stripBearerPrefix(value);
   }
 
+  private normalizeIdentityValue(value: unknown): string | null {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'number') return Number.isFinite(value) ? String(value) : null;
+    if (typeof value === 'bigint') return String(value);
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+
   private buildAuthHeader(accessToken: string): Record<string, string> {
     const normalized = this.stripBearerPrefix(accessToken);
     return { Authorization: `Bearer ${normalized}` };
@@ -247,7 +256,15 @@ export class Sub2ApiAdapter extends BasePlatformAdapter {
     return true;
   }
 
-  private parseTokenItems(payload: any): Array<{ id: number; key: string; name: string; enabled: boolean; tokenGroup: string | null }> {
+  private parseTokenItems(payload: any): Array<{
+    id: number;
+    key: string;
+    name: string;
+    enabled: boolean;
+    tokenGroup: string | null;
+    upstreamId: string;
+    upstreamCreatedAt: string | null;
+  }> {
     const source = payload?.data ?? payload;
     const rawItems = (() => {
       if (Array.isArray(source)) return source;
@@ -257,7 +274,15 @@ export class Sub2ApiAdapter extends BasePlatformAdapter {
       return [];
     })();
 
-    const items: Array<{ id: number; key: string; name: string; enabled: boolean; tokenGroup: string | null }> = [];
+    const items: Array<{
+      id: number;
+      key: string;
+      name: string;
+      enabled: boolean;
+      tokenGroup: string | null;
+      upstreamId: string;
+      upstreamCreatedAt: string | null;
+    }> = [];
     for (const item of rawItems) {
       const key = typeof item?.key === 'string' ? item.key.trim() : '';
       if (!key) continue;
@@ -280,6 +305,15 @@ export class Sub2ApiAdapter extends BasePlatformAdapter {
         name,
         enabled: this.parseTokenEnabled(item?.status),
         tokenGroup,
+        upstreamId: String(id),
+        upstreamCreatedAt: this.normalizeIdentityValue(
+          item?.created_at
+            ?? item?.createdAt
+            ?? item?.create_time
+            ?? item?.createTime
+            ?? item?.created_time
+            ?? item?.createdTime,
+        ),
       });
     }
     return items;
@@ -494,7 +528,15 @@ export class Sub2ApiAdapter extends BasePlatformAdapter {
     return normalizedBase;
   }
 
-  private async listApiKeys(baseUrl: string, accessToken: string): Promise<Array<{ id: number; key: string; name: string; enabled: boolean; tokenGroup: string | null }>> {
+  private async listApiKeys(baseUrl: string, accessToken: string): Promise<Array<{
+    id: number;
+    key: string;
+    name: string;
+    enabled: boolean;
+    tokenGroup: string | null;
+    upstreamId: string;
+    upstreamCreatedAt: string | null;
+  }>> {
     const endpoints = [
       '/api/v1/keys?page=1&page_size=100',
       '/api/v1/api-keys?page=1&page_size=100',
@@ -788,6 +830,8 @@ export class Sub2ApiAdapter extends BasePlatformAdapter {
           enabled: item.enabled,
         };
         if (item.tokenGroup) tokenInfo.tokenGroup = item.tokenGroup;
+        tokenInfo.upstreamId = item.upstreamId;
+        if (item.upstreamCreatedAt) tokenInfo.upstreamCreatedAt = item.upstreamCreatedAt;
         return tokenInfo;
       });
     } catch {

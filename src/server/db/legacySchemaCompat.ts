@@ -75,6 +75,7 @@ const BOOTSTRAP_OWNED_LEGACY_INDEXES = [
   'downstream_api_keys_name_idx',
   'downstream_api_keys_enabled_idx',
   'downstream_api_keys_expires_at_idx',
+  'account_tokens_account_upstream_token_idx',
   'proxy_logs_client_app_id_created_at_idx',
   'proxy_logs_client_family_created_at_idx',
   'proxy_logs_downstream_api_key_created_at_idx',

@@ -131,6 +131,18 @@
           "notNull": true,
           "defaultValue": "'ready'",
           "primaryKey": false
+        },
+        "upstream_token_id": {
+          "logicalType": "text",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "upstream_created_at": {
+          "logicalType": "datetime",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
         }
       }
     },
@@ -2346,6 +2358,15 @@
       "table": "account_tokens",
       "columns": [
         "account_id"
+      ],
+      "unique": false
+    },
+    {
+      "name": "account_tokens_account_upstream_token_idx",
+      "table": "account_tokens",
+      "columns": [
+        "account_id",
+        "upstream_token_id"
       ],
       "unique": false
     },

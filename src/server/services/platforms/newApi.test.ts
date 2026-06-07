@@ -222,6 +222,24 @@ describe('NewApiAdapter', () => {
           res.end(JSON.stringify({ success: false, message: 'unauthorized' }));
           return;
         }
+        if (typeof req.headers.authorization === 'string' && req.headers.authorization === 'Bearer identity-token') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            data: {
+              items: [
+                {
+                  id: 42,
+                  key: 'identity-api-key',
+                  name: 'identity-token',
+                  group: 'vip',
+                  status: 1,
+                  created_at: '2026-03-20T09:00:00Z',
+                },
+              ],
+            },
+          }));
+          return;
+        }
 
         if (typeof req.headers.cookie === 'string' && req.headers.cookie.includes(`session=${COOKIE_SESSION_TOKEN}`)) {
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -577,6 +595,22 @@ describe('NewApiAdapter', () => {
     const token = await adapter.getApiToken(baseUrl, 'session-token', 11494);
 
     expect(token).toBe('api-key-from-token-list');
+  });
+
+  it('preserves upstream api key identity fields from token list response', async () => {
+    const adapter = new NewApiAdapter();
+    const tokens = await adapter.getApiTokens(baseUrl, 'identity-token', 11494);
+
+    expect(tokens).toEqual([
+      {
+        name: 'identity-token',
+        key: 'identity-api-key',
+        enabled: true,
+        tokenGroup: 'vip',
+        upstreamId: '42',
+        upstreamCreatedAt: '2026-03-20T09:00:00Z',
+      },
+    ]);
   });
 
   it('solves anyrouter acw challenge for account-password login', async () => {

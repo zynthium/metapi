@@ -1,4 +1,3 @@
-CREATE TABLE IF NOT EXISTS `account_group_ratios` (`id` INT AUTO_INCREMENT NOT NULL PRIMARY KEY, `account_id` INT NOT NULL, `site_id` INT NOT NULL, `group_name` TEXT NOT NULL, `multiplier` DOUBLE NOT NULL, `refreshed_at` VARCHAR(191), `failed_attempts` INT NOT NULL DEFAULT 0, `last_error` TEXT, `created_at` VARCHAR(191) DEFAULT (DATE_FORMAT(NOW(), '%Y-%m-%d %H:%i:%s')), `updated_at` VARCHAR(191) DEFAULT (DATE_FORMAT(NOW(), '%Y-%m-%d %H:%i:%s')), FOREIGN KEY (`account_id`) REFERENCES `accounts`(`id`) ON DELETE CASCADE, FOREIGN KEY (`site_id`) REFERENCES `sites`(`id`) ON DELETE CASCADE);
-CREATE UNIQUE INDEX `account_group_ratios_account_site_group_unique` ON `account_group_ratios` (`account_id`, `site_id`, `group_name`(191));
-CREATE INDEX `account_group_ratios_account_site_idx` ON `account_group_ratios` (`account_id`, `site_id`);
-CREATE INDEX `account_group_ratios_site_group_idx` ON `account_group_ratios` (`site_id`, `group_name`(191));
+ALTER TABLE `account_tokens` ADD COLUMN `upstream_token_id` TEXT;
+ALTER TABLE `account_tokens` ADD COLUMN `upstream_created_at` VARCHAR(191);
+CREATE INDEX `account_tokens_account_upstream_token_idx` ON `account_tokens` (`account_id`, `upstream_token_id`(191));

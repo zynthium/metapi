@@ -16,6 +16,14 @@ describe('schema contract generation', () => {
       notNull: true,
       defaultValue: "'ready'",
     });
+    expect(contract.tables.account_tokens.columns.upstream_token_id).toMatchObject({
+      logicalType: 'text',
+      notNull: false,
+    });
+    expect(contract.tables.account_tokens.columns.upstream_created_at).toMatchObject({
+      logicalType: 'datetime',
+      notNull: false,
+    });
     expect(contract.tables.site_disabled_models).toBeDefined();
     expect(contract.tables.downstream_api_keys).toBeDefined();
     expect(contract.tables.proxy_files).toBeDefined();
@@ -42,6 +50,14 @@ describe('schema contract generation', () => {
     });
     expect(contract.indexes).toContainEqual(
       expect.objectContaining({ name: 'sites_status_idx', table: 'sites', unique: false }),
+    );
+    expect(contract.indexes).toContainEqual(
+      expect.objectContaining({
+        name: 'account_tokens_account_upstream_token_idx',
+        table: 'account_tokens',
+        columns: ['account_id', 'upstream_token_id'],
+        unique: false,
+      }),
     );
     expect(contract.uniques).toContainEqual(
       expect.objectContaining({

@@ -339,7 +339,15 @@ function buildAccountIdentityKey(input: {
   return `user::${input.siteKey}::${asString(input.username)}`;
 }
 
-function buildTokenIdentityKey(row: Pick<AccountTokenRow, 'name' | 'token' | 'tokenGroup' | 'source' | 'isDefault'>, accountKey: string): string {
+function buildTokenIdentityKey(
+  row: Pick<AccountTokenRow, 'name' | 'token' | 'source' | 'isDefault' | 'upstreamTokenId'>,
+  accountKey: string,
+): string {
+  const upstreamTokenId = asString(row.upstreamTokenId);
+  if (upstreamTokenId) {
+    return `token-upstream::${accountKey}::${upstreamTokenId}`;
+  }
+
   const token = asString(row.token);
   if (token) {
     return `token::${accountKey}::${token}`;
@@ -349,7 +357,6 @@ function buildTokenIdentityKey(row: Pick<AccountTokenRow, 'name' | 'token' | 'to
     'token-meta',
     accountKey,
     asString(row.name),
-    asString(row.tokenGroup),
     asString(row.source),
     row.isDefault ? '1' : '0',
   ].join('::');
@@ -667,6 +674,8 @@ function pushDefaultImportedToken(
     token,
     tokenGroup: 'default',
     valueStatus: 'ready',
+    upstreamTokenId: null,
+    upstreamCreatedAt: null,
     source: 'legacy',
     enabled: true,
     isDefault: true,
@@ -1081,6 +1090,8 @@ function buildAccountsSectionFromRefBackup(data: RawBackupData): AccountsBackupS
         token: apiToken,
         tokenGroup: 'default',
         valueStatus: 'ready',
+        upstreamTokenId: null,
+        upstreamCreatedAt: null,
         source: 'legacy',
         enabled: true,
         isDefault: true,
@@ -1617,6 +1628,8 @@ async function importAccountsSection(section: AccountsBackupSection): Promise<vo
         token: row.token,
         tokenGroup: row.tokenGroup ?? null,
         valueStatus: row.valueStatus ?? 'ready',
+        upstreamTokenId: row.upstreamTokenId ?? null,
+        upstreamCreatedAt: row.upstreamCreatedAt ?? null,
         source: row.source,
         enabled: row.enabled,
         isDefault: row.isDefault,

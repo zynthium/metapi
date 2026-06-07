@@ -32,6 +32,10 @@ describe('schema artifact generator', () => {
     expect(artifacts.mysqlBootstrap).toContain('`snapshot_key` TEXT NOT NULL');
     expect(artifacts.postgresBootstrap).toContain('"snapshot_key" TEXT NOT NULL');
     expect(artifacts.postgresBootstrap).toContain('"token_group"');
+    expect(artifacts.mysqlBootstrap).toContain('`upstream_token_id` TEXT');
+    expect(artifacts.postgresBootstrap).toContain('"upstream_token_id" TEXT');
+    expect(artifacts.mysqlBootstrap).toContain('CREATE INDEX `account_tokens_account_upstream_token_idx` ON `account_tokens` (`account_id`, `upstream_token_id`(191))');
+    expect(artifacts.postgresBootstrap).toContain('CREATE INDEX "account_tokens_account_upstream_token_idx" ON "account_tokens" ("account_id", "upstream_token_id")');
   });
 
   it('generates additive upgrade sql for newly added tables, columns, indexes, and uniques', () => {

@@ -96,6 +96,10 @@ describe('backupService', () => {
       accountId: account.id,
       name: 'default',
       token: 'sk-roundtrip-token',
+      tokenGroup: 'vip',
+      valueStatus: 'ready' as any,
+      upstreamTokenId: 'upstream-token-42',
+      upstreamCreatedAt: '2026-03-20T09:00:00.000Z',
       source: 'manual',
       enabled: true,
       isDefault: true,
@@ -254,6 +258,14 @@ describe('backupService', () => {
     expect(exported.accounts.downstreamApiKeys[0]).not.toHaveProperty('usedCost');
     expect(exported.accounts.downstreamApiKeys[0]).not.toHaveProperty('usedRequests');
     expect(exported.accounts.downstreamApiKeys[0]).not.toHaveProperty('lastUsedAt');
+    expect(exported.accounts.accountTokens).toEqual([
+      expect.objectContaining({
+        id: accountToken.id,
+        tokenGroup: 'vip',
+        upstreamTokenId: 'upstream-token-42',
+        upstreamCreatedAt: '2026-03-20T09:00:00.000Z',
+      }),
+    ]);
 
     const result = await backupService.importBackup(exported as Record<string, unknown>);
 
@@ -266,6 +278,7 @@ describe('backupService', () => {
     const restoredAccount = await db.select().from(schema.accounts).where(eq(schema.accounts.id, account.id)).get();
     const restoredRoute = await db.select().from(schema.tokenRoutes).where(eq(schema.tokenRoutes.id, route.id)).get();
     const restoredChannel = await db.select().from(schema.routeChannels).where(eq(schema.routeChannels.routeId, route.id)).get();
+    const restoredAccountToken = await db.select().from(schema.accountTokens).where(eq(schema.accountTokens.id, accountToken.id)).get();
     const restoredDisabledModels = await db.select().from(schema.siteDisabledModels).all();
     const restoredModelAvailability = await db.select().from(schema.modelAvailability).all();
     const restoredDownstreamKeys = await db.select().from(schema.downstreamApiKeys).all();
@@ -282,6 +295,11 @@ describe('backupService', () => {
     expect(restoredAccount?.oauthProvider).toBe('codex');
     expect(restoredAccount?.oauthAccountKey).toBe('roundtrip-account-key');
     expect(restoredAccount?.oauthProjectId).toBe('roundtrip-project-id');
+    expect(restoredAccountToken).toMatchObject({
+      tokenGroup: 'vip',
+      upstreamTokenId: 'upstream-token-42',
+      upstreamCreatedAt: '2026-03-20T09:00:00.000Z',
+    });
 
     expect(restoredRoute?.displayName).toBe('gpt-route');
     expect(restoredRoute?.displayIcon).toBe('icon-gpt');

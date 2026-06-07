@@ -468,7 +468,7 @@ function buildStatements(
   for (const row of snapshot.accounts.accountTokens) {
     statements.push({
       table: 'account_tokens',
-      columns: ['id', 'account_id', 'name', 'token', 'token_group', 'value_status', 'source', 'enabled', 'is_default', 'created_at', 'updated_at'],
+      columns: ['id', 'account_id', 'name', 'token', 'token_group', 'value_status', 'upstream_token_id', 'upstream_created_at', 'source', 'enabled', 'is_default', 'created_at', 'updated_at'],
       values: [
         asNumber(row.id, 0),
         asNumber(row.accountId, 0),
@@ -476,6 +476,8 @@ function buildStatements(
         asNullableString(row.token),
         asNullableString(row.tokenGroup),
         asNullableString((row as { valueStatus?: unknown }).valueStatus) ?? 'ready',
+        asNullableString(row.upstreamTokenId),
+        asNullableString(row.upstreamCreatedAt),
         asNullableString(row.source) ?? 'manual',
         asBoolean(row.enabled, true),
         asBoolean(row.isDefault, false),

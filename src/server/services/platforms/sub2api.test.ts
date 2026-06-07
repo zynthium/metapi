@@ -517,7 +517,7 @@ describe('Sub2ApiAdapter', () => {
     });
 
     const tokens = await adapter.getApiTokens(baseUrl, 'Bearer jwt-token');
-    expect(tokens).toEqual([{ key: 'sk-active', name: 'default', enabled: true }]);
+    expect(tokens).toEqual([{ key: 'sk-active', name: 'default', enabled: true, upstreamId: '11' }]);
   });
 
   it('lists api keys from /api/v1/keys and picks active key as default api token', async () => {
@@ -541,10 +541,49 @@ describe('Sub2ApiAdapter', () => {
 
     const tokens = await adapter.getApiTokens(baseUrl, 'jwt-token');
     expect(tokens).toEqual([
-      { key: 'sk-disabled', name: 'old', enabled: false },
-      { key: 'sk-active', name: 'default', enabled: true },
+      { key: 'sk-disabled', name: 'old', enabled: false, upstreamId: '10' },
+      { key: 'sk-active', name: 'default', enabled: true, upstreamId: '11' },
     ]);
     expect(await adapter.getApiToken(baseUrl, 'jwt-token')).toBe('sk-active');
+  });
+
+  it('preserves upstream api key identity fields when listing api keys', async () => {
+    await startServer((req, res) => {
+      if (req.url === '/api/v1/keys?page=1&page_size=100') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          code: 0,
+          message: 'success',
+          data: {
+            items: [
+              {
+                id: 11,
+                key: 'sk-active',
+                name: 'default',
+                status: 'active',
+                group_id: 7,
+                created_at: '2026-03-20T09:00:00Z',
+              },
+            ],
+          },
+        }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+
+    const tokens = await adapter.getApiTokens(baseUrl, 'jwt-token');
+
+    expect(tokens).toEqual([
+      {
+        key: 'sk-active',
+        name: 'default',
+        enabled: true,
+        tokenGroup: '7',
+        upstreamId: '11',
+        upstreamCreatedAt: '2026-03-20T09:00:00Z',
+      },
+    ]);
   });
 
   it('fetches user groups from /api/v1/groups', async () => {

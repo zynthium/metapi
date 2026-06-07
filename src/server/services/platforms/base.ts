@@ -64,6 +64,8 @@ export interface ApiTokenInfo {
   key: string;
   enabled?: boolean;
   tokenGroup?: string | null;
+  upstreamId?: string | null;
+  upstreamCreatedAt?: string | null;
 }
 
 export interface SiteAnnouncement {

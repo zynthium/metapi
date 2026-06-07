@@ -268,6 +268,15 @@ export class NewApiAdapter extends BasePlatformAdapter {
     return trimmed.startsWith('Bearer ') ? trimmed.slice(7).trim() : trimmed;
   }
 
+  private normalizeIdentityValue(value: unknown): string | null {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'number') return Number.isFinite(value) ? String(value) : null;
+    if (typeof value === 'bigint') return String(value);
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+
   private parseGroupKeys(payload: any): string[] {
     if (payload && typeof payload === 'object' && payload?.success === false) {
       return [];
@@ -337,6 +346,17 @@ export class NewApiAdapter extends BasePlatformAdapter {
         enabled: status === undefined ? true : status === 1,
       };
       if (rawGroup) tokenInfo.tokenGroup = rawGroup;
+      const upstreamId = this.normalizeIdentityValue(item?.id ?? item?.token_id ?? item?.tokenId);
+      const upstreamCreatedAt = this.normalizeIdentityValue(
+        item?.created_at
+          ?? item?.createdAt
+          ?? item?.create_time
+          ?? item?.createTime
+          ?? item?.created_time
+          ?? item?.createdTime,
+      );
+      if (upstreamId) tokenInfo.upstreamId = upstreamId;
+      if (upstreamCreatedAt) tokenInfo.upstreamCreatedAt = upstreamCreatedAt;
       normalized.push(tokenInfo);
     }
     return normalized;

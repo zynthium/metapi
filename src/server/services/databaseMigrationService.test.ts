@@ -247,6 +247,56 @@ describe('databaseMigrationService', () => {
     expect(siteStatement?.values[customHeadersIndex]).toBe('{"x-site-scope":"internal"}');
   });
 
+  it('includes upstream token identity fields when building account token migration statements', () => {
+    const statements = __databaseMigrationServiceTestUtils.buildStatements({
+      version: 'test',
+      timestamp: Date.now(),
+      accounts: {
+        sites: [],
+        siteAnnouncements: [],
+        siteDisabledModels: [],
+        accounts: [],
+        accountTokens: [{
+          id: 3,
+          accountId: 2,
+          name: 'vip-token',
+          token: 'sk-token',
+          tokenGroup: 'vip',
+          valueStatus: 'ready',
+          upstreamTokenId: 'upstream-token-42',
+          upstreamCreatedAt: '2026-03-20T09:00:00.000Z',
+          source: 'sync',
+          enabled: true,
+          isDefault: true,
+          createdAt: '2026-03-20T10:00:00.000Z',
+          updatedAt: '2026-03-21T10:00:00.000Z',
+        }],
+        accountGroupRatios: [],
+        checkinLogs: [],
+        modelAvailability: [],
+        tokenModelAvailability: [],
+        tokenRoutes: [],
+        routeChannels: [],
+        routeGroupSources: [],
+        proxyLogs: [],
+        proxyVideoTasks: [],
+        proxyFiles: [],
+        downstreamApiKeys: [],
+        events: [],
+      },
+      preferences: {
+        settings: [],
+      },
+    } as any);
+
+    const statement = statements.find((item) => item.table === 'account_tokens');
+    expect(statement).toBeDefined();
+    expect(statement?.columns).toContain('upstream_token_id');
+    expect(statement?.columns).toContain('upstream_created_at');
+    expect(statement?.values[statement.columns.indexOf('upstream_token_id')]).toBe('upstream-token-42');
+    expect(statement?.values[statement.columns.indexOf('upstream_created_at')]).toBe('2026-03-20T09:00:00.000Z');
+  });
+
   it('includes account group ratios when building migration statements', () => {
     const statements = __databaseMigrationServiceTestUtils.buildStatements({
       version: 'test',

@@ -92,6 +92,8 @@ export const accountTokens = sqliteTable('account_tokens', {
   token: text('token').notNull(),
   tokenGroup: text('token_group'),
   valueStatus: text('value_status').notNull().default('ready'),
+  upstreamTokenId: text('upstream_token_id'),
+  upstreamCreatedAt: text('upstream_created_at'),
   source: text('source').default('manual'), // 'manual' | 'sync' | 'legacy'
   enabled: integer('enabled', { mode: 'boolean' }).default(true),
   isDefault: integer('is_default', { mode: 'boolean' }).default(false),
@@ -100,6 +102,7 @@ export const accountTokens = sqliteTable('account_tokens', {
 }, (table) => ({
   accountIdIdx: index('account_tokens_account_id_idx').on(table.accountId),
   accountEnabledIdx: index('account_tokens_account_enabled_idx').on(table.accountId, table.enabled),
+  accountUpstreamTokenIdx: index('account_tokens_account_upstream_token_idx').on(table.accountId, table.upstreamTokenId),
   enabledIdx: index('account_tokens_enabled_idx').on(table.enabled),
 }));
 

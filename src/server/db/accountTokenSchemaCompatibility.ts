@@ -32,6 +32,24 @@ export const ACCOUNT_TOKEN_COLUMN_COMPATIBILITY_SPECS: AccountTokenColumnCompati
       postgres: "ALTER TABLE \"account_tokens\" ADD COLUMN \"value_status\" TEXT NOT NULL DEFAULT 'ready'",
     },
   },
+  {
+    table: 'account_tokens',
+    column: 'upstream_token_id',
+    addSql: {
+      sqlite: 'ALTER TABLE account_tokens ADD COLUMN upstream_token_id text;',
+      mysql: 'ALTER TABLE `account_tokens` ADD COLUMN `upstream_token_id` TEXT NULL',
+      postgres: 'ALTER TABLE "account_tokens" ADD COLUMN "upstream_token_id" TEXT',
+    },
+  },
+  {
+    table: 'account_tokens',
+    column: 'upstream_created_at',
+    addSql: {
+      sqlite: 'ALTER TABLE account_tokens ADD COLUMN upstream_created_at text;',
+      mysql: 'ALTER TABLE `account_tokens` ADD COLUMN `upstream_created_at` VARCHAR(191) NULL',
+      postgres: 'ALTER TABLE "account_tokens" ADD COLUMN "upstream_created_at" TEXT',
+    },
+  },
 ];
 
 function normalizeSchemaErrorMessage(error: unknown): string {

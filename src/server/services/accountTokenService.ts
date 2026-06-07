@@ -9,6 +9,8 @@ type UpstreamApiToken = {
   key?: string | null;
   enabled?: boolean | null;
   tokenGroup?: string | null;
+  upstreamId?: string | number | null;
+  upstreamCreatedAt?: string | number | null;
 };
 
 type AccountTokenRow = typeof schema.accountTokens.$inferSelect;
@@ -53,6 +55,19 @@ function normalizeTokenName(name: string | null | undefined, fallbackIndex = 1):
 
 function normalizeTokenValue(token: string | null | undefined): string | null {
   const trimmed = (token || '').trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeIdentityValue(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? String(value) : null;
+  }
+  if (typeof value === 'bigint') {
+    return String(value);
+  }
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
 }
 
@@ -148,15 +163,6 @@ function normalizeTokenGroup(value: string | null | undefined, tokenName?: strin
   }
   if (/^token-\d+$/.test(normalized)) return null;
   return name;
-}
-
-function sameTokenGroup(
-  leftGroup: string | null | undefined,
-  leftName: string | null | undefined,
-  rightGroup: string | null | undefined,
-  rightName: string | null | undefined,
-): boolean {
-  return normalizeTokenGroup(leftGroup, leftName) === normalizeTokenGroup(rightGroup, rightName);
 }
 
 async function updateAccountApiToken(accountId: number, tokenValue: string | null) {
@@ -307,38 +313,137 @@ export async function syncTokensFromUpstream(accountId: number, upstreamTokens: 
   const pendingTokenIds: number[] = [];
   let index = existing.length + 1;
 
+  const removeRowsFromExisting = (rows: AccountTokenRow[]) => {
+    for (const row of rows) {
+      const rowIndex = existing.findIndex((item) => item.id === row.id);
+      if (rowIndex >= 0) existing.splice(rowIndex, 1);
+    }
+  };
+
+  const deleteStaleMaskedPlaceholders = async (
+    target: AccountTokenRow,
+    tokenName: string,
+    tokenValue: string,
+    upstreamTokenId: string | null,
+  ) => {
+    const staleMaskedPlaceholders = existing.filter((row) => {
+      if (row.id === target.id || !isMaskedPendingAccountToken(row)) return false;
+      const rowUpstreamTokenId = normalizeIdentityValue(row.upstreamTokenId);
+      if (upstreamTokenId && rowUpstreamTokenId === upstreamTokenId) return true;
+      return row.name === tokenName && matchesMaskedTokenValue(row.token, tokenValue);
+    });
+
+    for (const placeholder of staleMaskedPlaceholders) {
+      await db.delete(schema.accountTokens)
+        .where(eq(schema.accountTokens.id, placeholder.id))
+        .run();
+    }
+    removeRowsFromExisting(staleMaskedPlaceholders);
+  };
+
+  const updateExistingFromUpstream = async (
+    target: AccountTokenRow,
+    input: {
+      tokenName: string;
+      tokenValue: string;
+      tokenGroup: string | null;
+      enabled: boolean;
+      nextValueStatus: AccountTokenValueStatus;
+      upstreamTokenId: string | null;
+      upstreamCreatedAt: string | null;
+    },
+  ) => {
+    const targetWasReady = isReadyAccountToken(target);
+    const preserveReadyFullToken = input.nextValueStatus === ACCOUNT_TOKEN_VALUE_STATUS_MASKED_PENDING
+      && targetWasReady;
+    const storedValueStatus = preserveReadyFullToken
+      ? ACCOUNT_TOKEN_VALUE_STATUS_READY
+      : input.nextValueStatus;
+    const storedToken = preserveReadyFullToken ? target.token : input.tokenValue;
+    const storedEnabled = storedValueStatus === ACCOUNT_TOKEN_VALUE_STATUS_READY
+      ? input.enabled
+      : false;
+    const storedIsDefault = storedValueStatus === ACCOUNT_TOKEN_VALUE_STATUS_READY && targetWasReady
+      ? target.isDefault
+      : false;
+
+    await db.update(schema.accountTokens)
+      .set({
+        name: input.tokenName,
+        token: storedToken,
+        tokenGroup: input.tokenGroup,
+        valueStatus: storedValueStatus,
+        upstreamTokenId: input.upstreamTokenId,
+        upstreamCreatedAt: input.upstreamCreatedAt,
+        source: 'sync',
+        enabled: storedEnabled,
+        isDefault: storedIsDefault,
+        updatedAt: now,
+      })
+      .where(eq(schema.accountTokens.id, target.id))
+      .run();
+
+    target.name = input.tokenName;
+    target.token = storedToken;
+    target.tokenGroup = input.tokenGroup;
+    target.valueStatus = storedValueStatus;
+    target.upstreamTokenId = input.upstreamTokenId;
+    target.upstreamCreatedAt = input.upstreamCreatedAt;
+    target.enabled = storedEnabled;
+    target.isDefault = storedIsDefault;
+    target.source = 'sync';
+    target.updatedAt = now;
+
+    if (storedValueStatus === ACCOUNT_TOKEN_VALUE_STATUS_READY) {
+      await deleteStaleMaskedPlaceholders(target, input.tokenName, input.tokenValue, input.upstreamTokenId);
+    }
+
+    return storedValueStatus;
+  };
+
   for (const upstream of upstreamTokens) {
     const tokenValue = normalizeTokenValue(upstream.key);
     if (!tokenValue) continue;
     const tokenName = normalizeTokenName(upstream.name, index);
     const enabled = upstream.enabled ?? true;
     const tokenGroup = normalizeTokenGroup(upstream.tokenGroup, tokenName);
+    const upstreamTokenId = normalizeIdentityValue(upstream.upstreamId);
+    const upstreamCreatedAt = normalizeIdentityValue(upstream.upstreamCreatedAt);
     const nextValueStatus = isMaskedTokenValue(tokenValue)
       ? ACCOUNT_TOKEN_VALUE_STATUS_MASKED_PENDING
       : ACCOUNT_TOKEN_VALUE_STATUS_READY;
+    const updateInput = {
+      tokenName,
+      tokenValue,
+      tokenGroup,
+      enabled,
+      nextValueStatus,
+      upstreamTokenId,
+      upstreamCreatedAt,
+    };
+
+    const byUpstreamId = upstreamTokenId
+      ? existing.find((row) => normalizeIdentityValue(row.upstreamTokenId) === upstreamTokenId)
+      : null;
+    if (byUpstreamId && isReadyAccountToken(byUpstreamId)) {
+      const storedValueStatus = await updateExistingFromUpstream(byUpstreamId, updateInput);
+      updated++;
+      if (storedValueStatus === ACCOUNT_TOKEN_VALUE_STATUS_MASKED_PENDING) {
+        maskedPending++;
+        pendingTokenIds.push(byUpstreamId.id);
+      }
+      continue;
+    }
 
     const byToken = existing.find((row) => (
       row.token === tokenValue
       && resolveAccountTokenValueStatus(row) === ACCOUNT_TOKEN_VALUE_STATUS_READY
     ));
     if (byToken) {
-      await db.update(schema.accountTokens)
-        .set({
-          name: tokenName,
-          tokenGroup,
-          valueStatus: ACCOUNT_TOKEN_VALUE_STATUS_READY,
-          source: 'sync',
-          enabled,
-          updatedAt: now,
-        })
-        .where(eq(schema.accountTokens.id, byToken.id))
-        .run();
-      byToken.name = tokenName;
-      byToken.tokenGroup = tokenGroup;
-      byToken.valueStatus = ACCOUNT_TOKEN_VALUE_STATUS_READY;
-      byToken.enabled = enabled;
-      byToken.source = 'sync';
-      byToken.updatedAt = now;
+      await updateExistingFromUpstream(byToken, {
+        ...updateInput,
+        nextValueStatus: ACCOUNT_TOKEN_VALUE_STATUS_READY,
+      });
       updated++;
       continue;
     }
@@ -348,88 +453,37 @@ export async function syncTokensFromUpstream(accountId: number, upstreamTokens: 
         resolveAccountTokenValueStatus(row) === ACCOUNT_TOKEN_VALUE_STATUS_READY
         && matchesMaskedTokenValue(row.token, tokenValue)
         && row.name === tokenName
-        && sameTokenGroup(row.tokenGroup, row.name, tokenGroup, tokenName)
       ))
       : [];
     const readyMaskedMatch = matchingReadyByMaskedValue.length === 1
       ? matchingReadyByMaskedValue[0]
       : null;
     if (readyMaskedMatch) {
-      const staleMaskedPlaceholders = existing.filter((row) => (
-        row.id !== readyMaskedMatch.id
-        && resolveAccountTokenValueStatus(row) === ACCOUNT_TOKEN_VALUE_STATUS_MASKED_PENDING
-        && matchesMaskedTokenValue(row.token, tokenValue)
-        && row.name === tokenName
-        && sameTokenGroup(row.tokenGroup, row.name, tokenGroup, tokenName)
-      ));
-
-      await db.update(schema.accountTokens)
-        .set({
-          name: tokenName,
-          tokenGroup,
-          valueStatus: ACCOUNT_TOKEN_VALUE_STATUS_READY,
-          source: 'sync',
-          enabled,
-          updatedAt: now,
-        })
-        .where(eq(schema.accountTokens.id, readyMaskedMatch.id))
-        .run();
-      readyMaskedMatch.name = tokenName;
-      readyMaskedMatch.tokenGroup = tokenGroup;
-      readyMaskedMatch.valueStatus = ACCOUNT_TOKEN_VALUE_STATUS_READY;
-      readyMaskedMatch.enabled = enabled;
-      readyMaskedMatch.source = 'sync';
-      readyMaskedMatch.updatedAt = now;
-
-      if (staleMaskedPlaceholders.length > 0) {
-        for (const placeholder of staleMaskedPlaceholders) {
-          await db.delete(schema.accountTokens)
-            .where(eq(schema.accountTokens.id, placeholder.id))
-            .run();
-        }
-        for (const placeholder of staleMaskedPlaceholders) {
-          const placeholderIndex = existing.findIndex((row) => row.id === placeholder.id);
-          if (placeholderIndex >= 0) {
-            existing.splice(placeholderIndex, 1);
-          }
-        }
-      }
-
+      await updateExistingFromUpstream(readyMaskedMatch, updateInput);
       updated++;
+      continue;
+    }
+
+    if (byUpstreamId) {
+      const storedValueStatus = await updateExistingFromUpstream(byUpstreamId, updateInput);
+      updated++;
+      if (storedValueStatus === ACCOUNT_TOKEN_VALUE_STATUS_MASKED_PENDING) {
+        maskedPending++;
+        pendingTokenIds.push(byUpstreamId.id);
+      }
       continue;
     }
 
     const matchingPlaceholder = existing.find((row) => (
       isMaskedPendingAccountToken(row)
       && row.name === tokenName
-      && sameTokenGroup(row.tokenGroup, row.name, tokenGroup, tokenName)
     ));
 
     if (matchingPlaceholder) {
-      const nextEnabled = nextValueStatus === ACCOUNT_TOKEN_VALUE_STATUS_READY ? enabled : false;
-      await db.update(schema.accountTokens)
-        .set({
-          name: tokenName,
-          token: tokenValue,
-          tokenGroup,
-          valueStatus: nextValueStatus,
-          source: 'sync',
-          enabled: nextEnabled,
-          isDefault: false,
-          updatedAt: now,
-        })
-        .where(eq(schema.accountTokens.id, matchingPlaceholder.id))
-        .run();
-      matchingPlaceholder.name = tokenName;
-      matchingPlaceholder.token = tokenValue;
-      matchingPlaceholder.tokenGroup = tokenGroup;
-      matchingPlaceholder.valueStatus = nextValueStatus;
-      matchingPlaceholder.source = 'sync';
-      matchingPlaceholder.enabled = nextEnabled;
+      const storedValueStatus = await updateExistingFromUpstream(matchingPlaceholder, updateInput);
       matchingPlaceholder.isDefault = false;
-      matchingPlaceholder.updatedAt = now;
       updated++;
-      if (nextValueStatus === ACCOUNT_TOKEN_VALUE_STATUS_MASKED_PENDING) {
+      if (storedValueStatus === ACCOUNT_TOKEN_VALUE_STATUS_MASKED_PENDING) {
         maskedPending++;
         pendingTokenIds.push(matchingPlaceholder.id);
       }
@@ -443,6 +497,8 @@ export async function syncTokensFromUpstream(accountId: number, upstreamTokens: 
         token: tokenValue,
         tokenGroup,
         valueStatus: nextValueStatus,
+        upstreamTokenId,
+        upstreamCreatedAt,
         source: 'sync',
         enabled: nextValueStatus === ACCOUNT_TOKEN_VALUE_STATUS_READY ? enabled : false,
         isDefault: false,

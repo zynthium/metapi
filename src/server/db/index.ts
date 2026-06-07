@@ -183,6 +183,8 @@ function ensureTokenManagementSchema() {
       token text NOT NULL,
       token_group text,
       value_status text NOT NULL DEFAULT 'ready',
+      upstream_token_id text,
+      upstream_created_at text,
       source text DEFAULT 'manual',
       enabled integer DEFAULT true,
       is_default integer DEFAULT false,
@@ -200,6 +202,18 @@ function ensureTokenManagementSchema() {
   }
   if (!tableColumnExists('account_tokens', 'value_status')) {
     execSqliteLegacyCompat("ALTER TABLE account_tokens ADD COLUMN value_status text NOT NULL DEFAULT 'ready';");
+  }
+  if (!tableColumnExists('account_tokens', 'upstream_token_id')) {
+    execSqliteLegacyCompat('ALTER TABLE account_tokens ADD COLUMN upstream_token_id text;');
+  }
+  if (!tableColumnExists('account_tokens', 'upstream_created_at')) {
+    execSqliteLegacyCompat('ALTER TABLE account_tokens ADD COLUMN upstream_created_at text;');
+  }
+  if (!tableIndexExists('account_tokens_account_upstream_token_idx')) {
+    execSqliteLegacyCompat(`
+      CREATE INDEX IF NOT EXISTS account_tokens_account_upstream_token_idx
+      ON account_tokens(account_id, upstream_token_id);
+    `);
   }
 
   execSqliteStatement(`
