@@ -1,5 +1,7 @@
 // Total raw upstream fetch attempts for transient 403s on the same endpoint.
 export const FORBIDDEN_SAME_CHANNEL_MAX_ATTEMPTS = 5;
+export const FORBIDDEN_SAME_CHANNEL_RETRY_BASE_DELAY_MS = 250;
+export const FORBIDDEN_SAME_CHANNEL_RETRY_MAX_DELAY_MS = 1_000;
 
 type RetryableResponse = {
   ok: boolean;
@@ -12,6 +14,23 @@ type RetryableResponse = {
 
 export function shouldRetryForbiddenOnSameChannel(status: number, retryCount: number): boolean {
   return status === 403 && retryCount < FORBIDDEN_SAME_CHANNEL_MAX_ATTEMPTS - 1;
+}
+
+export function getForbiddenSameChannelRetryDelayMs(retryCount: number): number {
+  const normalizedRetryCount = Math.max(0, Math.trunc(retryCount));
+  return Math.min(
+    FORBIDDEN_SAME_CHANNEL_RETRY_BASE_DELAY_MS * (normalizedRetryCount + 1),
+    FORBIDDEN_SAME_CHANNEL_RETRY_MAX_DELAY_MS,
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function waitForbiddenSameChannelRetry(retryCount: number): Promise<void> {
+  await sleep(getForbiddenSameChannelRetryDelayMs(retryCount));
 }
 
 async function discardResponseBody(response: RetryableResponse): Promise<void> {
@@ -41,7 +60,9 @@ export async function retryForbiddenResponseOnSameChannel<T extends RetryableRes
     if (!shouldRetryForbiddenOnSameChannel(response.status, retryCount)) {
       return response;
     }
+    const currentRetryCount = retryCount;
     retryCount += 1;
     await discardResponseBody(response);
+    await waitForbiddenSameChannelRetry(currentRetryCount);
   }
 }

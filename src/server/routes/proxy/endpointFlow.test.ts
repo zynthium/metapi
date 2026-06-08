@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetch } from 'undici';
 import type { BuiltEndpointRequest } from './endpointFlow.js';
+import { getForbiddenSameChannelRetryDelayMs } from '../../proxy-core/orchestration/forbiddenSameChannelRetry.js';
 
 vi.mock('undici', async () => {
   const actual = await vi.importActual<typeof import('undici')>('undici');
@@ -40,6 +41,10 @@ describe('executeEndpointFlow', () => {
 
   beforeEach(() => {
     fetchMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('returns the first successful upstream response', async () => {
@@ -192,6 +197,36 @@ describe('executeEndpointFlow', () => {
     }
     expect(onDowngrade).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits before retrying transient 403 responses on the same endpoint', async () => {
+    vi.useFakeTimers();
+    const firstDelayMs = getForbiddenSameChannelRetryDelayMs(0);
+    const dispatchRequest = vi.fn()
+      .mockResolvedValueOnce(toUndiciResponse(new Response('forbidden', { status: 403 })))
+      .mockResolvedValueOnce(toUndiciResponse(new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })));
+
+    const resultPromise = executeEndpointFlow({
+      siteUrl: 'https://example.com',
+      endpointCandidates: ['responses'],
+      buildRequest: () => requestFor('/v1/responses'),
+      dispatchRequest,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dispatchRequest).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(firstDelayMs - 1);
+    expect(dispatchRequest).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await resultPromise;
+
+    expect(result.ok).toBe(true);
+    expect(dispatchRequest).toHaveBeenCalledTimes(2);
   });
 
   it('emits attempt callbacks for failed and successful endpoint probes', async () => {

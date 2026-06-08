@@ -7,7 +7,10 @@ import {
   summarizeUpstreamError,
   type UpstreamEndpoint,
 } from './upstreamRequest.js';
-import { shouldRetryForbiddenOnSameChannel } from './forbiddenSameChannelRetry.js';
+import {
+  shouldRetryForbiddenOnSameChannel,
+  waitForbiddenSameChannelRetry,
+} from './forbiddenSameChannelRetry.js';
 
 export type BuiltEndpointRequest = {
   endpoint: UpstreamEndpoint;
@@ -242,7 +245,9 @@ export async function executeEndpointFlow(input: ExecuteEndpointFlowInput): Prom
         response.status === 403
         && shouldRetryForbiddenOnSameChannel(response.status, forbiddenSameEndpointRetryCount)
       ) {
+        const currentRetryCount = forbiddenSameEndpointRetryCount;
         forbiddenSameEndpointRetryCount += 1;
+        await waitForbiddenSameChannelRetry(currentRetryCount);
         continue;
       }
       await runEndpointFlowHook(input.onAttemptFailure, {
