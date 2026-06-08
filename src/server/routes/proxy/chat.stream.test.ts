@@ -1,7 +1,8 @@
 import { zstdCompressSync } from 'node:zlib';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { config } from '../../config.js';
+import { getForbiddenSameChannelRetryDelayMs } from '../../proxy-core/orchestration/forbiddenSameChannelRetry.js';
 import { resetUpstreamEndpointRuntimeState } from '../../services/upstreamEndpointRuntimeMemory.js';
 
 const fetchMock = vi.fn();
@@ -170,6 +171,10 @@ describe('chat proxy stream behavior', () => {
     if (app) {
       await app.close();
     }
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('converts non-SSE upstream streaming responses into SSE events', async () => {
@@ -2232,13 +2237,17 @@ describe('chat proxy stream behavior', () => {
   });
 
   it('returns concise Cloudflare host error on /v1/responses 502 html failures', async () => {
+    vi.useFakeTimers();
+    (config as any).disableCrossProtocolFallback = true;
+    const totalRetryDelayMs = [0, 1, 2, 3]
+      .reduce((total, retryCount) => total + getForbiddenSameChannelRetryDelayMs(retryCount), 0);
     const html = '<!DOCTYPE html><html><head><title>qaq.al | 502: Bad gateway</title></head><body>Cloudflare Ray ID: 9d6f7c889ffbc8eb</body></html>';
     fetchMock.mockImplementation(() => Promise.resolve(new Response(html, {
       status: 502,
       headers: { 'content-type': 'text/html; charset=UTF-8' },
     })));
 
-    const response = await app.inject({
+    const responsePromise = app.inject({
       method: 'POST',
       url: '/v1/responses',
       payload: {
@@ -2247,7 +2256,11 @@ describe('chat proxy stream behavior', () => {
       },
     });
 
+    await vi.advanceTimersByTimeAsync(totalRetryDelayMs);
+    const response = await responsePromise;
+
     expect(response.statusCode).toBe(502);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
     const body = response.json();
     expect(body.error?.type).toBe('upstream_error');
     expect(body.error?.message).toContain('[upstream:');
@@ -2299,17 +2312,17 @@ describe('chat proxy stream behavior', () => {
     expect(body.error?.message).toBeTruthy();
   });
 
-  it('downgrades /v1/responses to /v1/chat/completions when upstream responses endpoint returns 502', async () => {
+  it('downgrades /v1/responses to /v1/chat/completions when upstream responses endpoint returns 503', async () => {
     fetchMock
       .mockResolvedValueOnce(new Response(
-        '<!DOCTYPE html><html><head><title>qaq.al | 502: Bad gateway</title></head><body>Cloudflare</body></html>',
+        '<!DOCTYPE html><html><head><title>qaq.al | 503: Service unavailable</title></head><body>Cloudflare</body></html>',
         {
-          status: 502,
+          status: 503,
           headers: { 'content-type': 'text/html; charset=UTF-8' },
         },
       ))
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        id: 'chatcmpl-fallback-502',
+        id: 'chatcmpl-fallback-503',
         object: 'chat.completion',
         model: 'upstream-gpt',
         choices: [{
@@ -2789,9 +2802,9 @@ describe('chat proxy stream behavior', () => {
         headers: { 'content-type': 'application/json' },
       }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        error: { message: 'Bad gateway', type: 'upstream_error' },
+        error: { message: 'Service unavailable', type: 'upstream_error' },
       }), {
-        status: 502,
+        status: 503,
         headers: { 'content-type': 'application/json' },
       }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
@@ -3575,7 +3588,7 @@ describe('chat proxy stream behavior', () => {
     expect(secondUrl).toContain('/v1/chat/completions');
   });
 
-  it('falls back to /v1/responses for /v1/chat/completions when messages/chat endpoints return 502', async () => {
+  it('falls back to /v1/responses for /v1/chat/completions when messages/chat endpoints return 503', async () => {
     selectChannelMock.mockReturnValue({
       channel: { id: 11, routeId: 22 },
       site: { name: 'generic-site', url: 'https://generic.example.com', platform: 'new-api' },
@@ -3587,16 +3600,16 @@ describe('chat proxy stream behavior', () => {
 
     fetchMock
       .mockResolvedValueOnce(new Response(
-        '<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body>Cloudflare</body></html>',
+        '<!DOCTYPE html><html><head><title>503 Service Unavailable</title></head><body>Cloudflare</body></html>',
         {
-          status: 502,
+          status: 503,
           headers: { 'content-type': 'text/html; charset=UTF-8' },
         },
       ))
       .mockResolvedValueOnce(new Response(
-        '<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body>Cloudflare</body></html>',
+        '<!DOCTYPE html><html><head><title>503 Service Unavailable</title></head><body>Cloudflare</body></html>',
         {
-          status: 502,
+          status: 503,
           headers: { 'content-type': 'text/html; charset=UTF-8' },
         },
       ))
@@ -3605,7 +3618,7 @@ describe('chat proxy stream behavior', () => {
         object: 'response',
         model: 'claude-haiku-4-5-20251001',
         status: 'completed',
-        output_text: 'ok via responses fallback after 502',
+        output_text: 'ok via responses fallback after 503',
         usage: { input_tokens: 5, output_tokens: 2, total_tokens: 7 },
       }), {
         status: 200,
@@ -3633,7 +3646,7 @@ describe('chat proxy stream behavior', () => {
     expect(thirdUrl).toContain('/v1/responses');
 
     const body = response.json();
-    expect(body?.choices?.[0]?.message?.content).toContain('ok via responses fallback after 502');
+    expect(body?.choices?.[0]?.message?.content).toContain('ok via responses fallback after 503');
   });
 
   it('stops after the first failed protocol when cross protocol fallback is disabled', async () => {
@@ -3648,9 +3661,9 @@ describe('chat proxy stream behavior', () => {
     });
 
     fetchMock.mockResolvedValueOnce(new Response(
-      '<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body>Cloudflare</body></html>',
+      '<!DOCTYPE html><html><head><title>503 Service Unavailable</title></head><body>Cloudflare</body></html>',
       {
-        status: 502,
+        status: 503,
         headers: { 'content-type': 'text/html; charset=UTF-8' },
       },
     ));
@@ -3665,7 +3678,7 @@ describe('chat proxy stream behavior', () => {
       },
     });
 
-    expect(response.statusCode).toBe(502);
+    expect(response.statusCode).toBe(503);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [firstUrl] = fetchMock.mock.calls[0] as [string, any];
     expect(firstUrl).toContain('/v1/messages');

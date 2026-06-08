@@ -241,10 +241,7 @@ export async function executeEndpointFlow(input: ExecuteEndpointFlowInput): Prom
         }, 'onDowngrade');
         continue endpointLoop;
       }
-      if (
-        response.status === 403
-        && shouldRetryForbiddenOnSameChannel(response.status, forbiddenSameEndpointRetryCount)
-      ) {
+      if (shouldRetryForbiddenOnSameChannel(response.status, forbiddenSameEndpointRetryCount)) {
         const currentRetryCount = forbiddenSameEndpointRetryCount;
         forbiddenSameEndpointRetryCount += 1;
         await waitForbiddenSameChannelRetry(currentRetryCount);

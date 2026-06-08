@@ -1,7 +1,8 @@
-// Total raw upstream fetch attempts for transient 403s on the same endpoint.
+// Total raw upstream fetch attempts for transient same-endpoint failures.
 export const FORBIDDEN_SAME_CHANNEL_MAX_ATTEMPTS = 5;
 export const FORBIDDEN_SAME_CHANNEL_RETRY_BASE_DELAY_MS = 250;
 export const FORBIDDEN_SAME_CHANNEL_RETRY_MAX_DELAY_MS = 1_000;
+const SAME_ENDPOINT_RETRYABLE_STATUSES = new Set([403, 502]);
 
 type RetryableResponse = {
   ok: boolean;
@@ -13,7 +14,7 @@ type RetryableResponse = {
 };
 
 export function shouldRetryForbiddenOnSameChannel(status: number, retryCount: number): boolean {
-  return status === 403 && retryCount < FORBIDDEN_SAME_CHANNEL_MAX_ATTEMPTS - 1;
+  return SAME_ENDPOINT_RETRYABLE_STATUSES.has(status) && retryCount < FORBIDDEN_SAME_CHANNEL_MAX_ATTEMPTS - 1;
 }
 
 export function getForbiddenSameChannelRetryDelayMs(retryCount: number): number {

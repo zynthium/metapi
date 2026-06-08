@@ -15,13 +15,13 @@ afterEach(() => {
 });
 
 describe('retryForbiddenResponseOnSameChannel', () => {
-  it('uses at most five same-endpoint attempts for transient 403 responses', async () => {
+  it.each([403, 502])('uses at most five same-endpoint attempts for transient %s responses', async (status) => {
     vi.useFakeTimers();
     const operation = vi.fn()
-      .mockResolvedValueOnce(new Response('forbidden 1', { status: 403 }))
-      .mockResolvedValueOnce(new Response('forbidden 2', { status: 403 }))
-      .mockResolvedValueOnce(new Response('forbidden 3', { status: 403 }))
-      .mockResolvedValueOnce(new Response('forbidden 4', { status: 403 }))
+      .mockResolvedValueOnce(new Response('upstream failed 1', { status }))
+      .mockResolvedValueOnce(new Response('upstream failed 2', { status }))
+      .mockResolvedValueOnce(new Response('upstream failed 3', { status }))
+      .mockResolvedValueOnce(new Response('upstream failed 4', { status }))
       .mockResolvedValueOnce(new Response('ok', { status: 200 }));
 
     const responsePromise = retryForbiddenResponseOnSameChannel(operation);
@@ -33,25 +33,25 @@ describe('retryForbiddenResponseOnSameChannel', () => {
     expect(operation).toHaveBeenCalledTimes(5);
   });
 
-  it('returns the final 403 after five same-endpoint attempts are exhausted', async () => {
+  it.each([403, 502])('returns the final %s after five same-endpoint attempts are exhausted', async (status) => {
     vi.useFakeTimers();
     const operation = vi.fn()
-      .mockImplementation(() => Promise.resolve(new Response('still forbidden', { status: 403 })));
+      .mockImplementation(() => Promise.resolve(new Response('still failing', { status })));
 
     const responsePromise = retryForbiddenResponseOnSameChannel(operation);
     await vi.advanceTimersByTimeAsync(totalRetryDelayMs());
     const response = await responsePromise;
 
-    expect(response.status).toBe(403);
-    expect(await response.text()).toBe('still forbidden');
+    expect(response.status).toBe(status);
+    expect(await response.text()).toBe('still failing');
     expect(operation).toHaveBeenCalledTimes(5);
   });
 
-  it('waits before retrying a transient 403 on the same endpoint', async () => {
+  it.each([403, 502])('waits before retrying a transient %s on the same endpoint', async (status) => {
     vi.useFakeTimers();
     const firstDelayMs = getForbiddenSameChannelRetryDelayMs(0);
     const operation = vi.fn()
-      .mockResolvedValueOnce(new Response('forbidden 1', { status: 403 }))
+      .mockResolvedValueOnce(new Response('upstream failed 1', { status }))
       .mockResolvedValueOnce(new Response('ok', { status: 200 }));
 
     const responsePromise = retryForbiddenResponseOnSameChannel(operation);

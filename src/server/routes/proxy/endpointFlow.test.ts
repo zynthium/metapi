@@ -199,11 +199,11 @@ describe('executeEndpointFlow', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('waits before retrying transient 403 responses on the same endpoint', async () => {
+  it.each([403, 502])('waits before retrying transient %s responses on the same endpoint', async (status) => {
     vi.useFakeTimers();
     const firstDelayMs = getForbiddenSameChannelRetryDelayMs(0);
     const dispatchRequest = vi.fn()
-      .mockResolvedValueOnce(toUndiciResponse(new Response('forbidden', { status: 403 })))
+      .mockResolvedValueOnce(toUndiciResponse(new Response('upstream failed', { status })))
       .mockResolvedValueOnce(toUndiciResponse(new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
@@ -227,6 +227,46 @@ describe('executeEndpointFlow', () => {
 
     expect(result.ok).toBe(true);
     expect(dispatchRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to the next endpoint only after exhausting same-endpoint 502 attempts', async () => {
+    vi.useFakeTimers();
+    const totalDelayMs = [0, 1, 2, 3]
+      .reduce((total, retryCount) => total + getForbiddenSameChannelRetryDelayMs(retryCount), 0);
+    const dispatchRequest = vi.fn()
+      .mockResolvedValueOnce(toUndiciResponse(new Response('bad gateway 1', { status: 502 })))
+      .mockResolvedValueOnce(toUndiciResponse(new Response('bad gateway 2', { status: 502 })))
+      .mockResolvedValueOnce(toUndiciResponse(new Response('bad gateway 3', { status: 502 })))
+      .mockResolvedValueOnce(toUndiciResponse(new Response('bad gateway 4', { status: 502 })))
+      .mockResolvedValueOnce(toUndiciResponse(new Response('bad gateway 5', { status: 502 })))
+      .mockResolvedValueOnce(toUndiciResponse(new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })));
+
+    const resultPromise = executeEndpointFlow({
+      siteUrl: 'https://example.com',
+      endpointCandidates: ['responses', 'chat'],
+      buildRequest: (endpoint) => endpoint === 'responses'
+        ? requestFor('/v1/responses')
+        : { ...requestFor('/v1/chat/completions'), endpoint },
+      dispatchRequest,
+      shouldDowngrade: () => true,
+    });
+
+    await vi.advanceTimersByTimeAsync(totalDelayMs);
+    const result = await resultPromise;
+
+    expect(result.ok).toBe(true);
+    expect(dispatchRequest).toHaveBeenCalledTimes(6);
+    expect(dispatchRequest.mock.calls.slice(0, 5).map((call) => call[0]?.path)).toEqual([
+      '/v1/responses',
+      '/v1/responses',
+      '/v1/responses',
+      '/v1/responses',
+      '/v1/responses',
+    ]);
+    expect(dispatchRequest.mock.calls[5]?.[0]?.path).toBe('/v1/chat/completions');
   });
 
   it('emits attempt callbacks for failed and successful endpoint probes', async () => {

@@ -169,7 +169,7 @@ describe('/v1/completions site api endpoint rotation', () => {
     selectNextChannelMock.mockResolvedValue(null);
 
     fetchMock
-      .mockResolvedValueOnce(new Response('bad gateway', { status: 502 }))
+      .mockResolvedValueOnce(new Response('service unavailable', { status: 503 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
         id: 'cmpl-ok',
         object: 'text_completion',
@@ -214,7 +214,7 @@ describe('/v1/completions site api endpoint rotation', () => {
       .all();
     expect(storedEndpoints[0]).toMatchObject({
       url: 'https://api-a.example.com',
-      lastFailureReason: 'HTTP 502: bad gateway',
+      lastFailureReason: 'HTTP 503: service unavailable',
     });
     expect(storedEndpoints[0]?.cooldownUntil).toBeTruthy();
     expect(storedEndpoints[1]).toMatchObject({

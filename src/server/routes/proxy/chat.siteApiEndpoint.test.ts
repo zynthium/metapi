@@ -191,9 +191,9 @@ describe('chat proxy site api endpoint rotation', () => {
     selectNextChannelMock.mockReturnValue(null);
 
     fetchMock
-      .mockResolvedValueOnce(new Response('bad gateway', { status: 502 }))
-      .mockResolvedValueOnce(new Response('bad gateway via responses', { status: 502 }))
-      .mockResolvedValueOnce(new Response('bad gateway via messages', { status: 502 }))
+      .mockResolvedValueOnce(new Response('service unavailable', { status: 503 }))
+      .mockResolvedValueOnce(new Response('service unavailable via responses', { status: 503 }))
+      .mockResolvedValueOnce(new Response('service unavailable via messages', { status: 503 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
         id: 'chatcmpl-ok',
         object: 'chat.completion',
@@ -236,7 +236,7 @@ describe('chat proxy site api endpoint rotation', () => {
       .all();
     expect(storedEndpoints[0]).toMatchObject({
       url: 'https://api-a.example.com',
-      lastFailureReason: 'HTTP 502: [upstream:/v1/messages] Upstream returned HTTP 502: bad gateway via messages',
+      lastFailureReason: 'HTTP 503: [upstream:/v1/messages] Upstream returned HTTP 503: service unavailable via messages',
     });
     expect(storedEndpoints[0]?.cooldownUntil).toBeTruthy();
     expect(storedEndpoints[1]?.lastSelectedAt).toBeTruthy();

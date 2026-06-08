@@ -412,10 +412,10 @@ describe('/v1/videos routes', () => {
       tokenValue: 'sk-demo',
       accountId: 33,
     });
-    fetchMock.mockResolvedValue(new Response('temporary unavailable', {
+    fetchMock.mockImplementation(() => Promise.resolve(new Response('temporary unavailable', {
       status: 502,
       headers: { 'content-type': 'text/plain' },
-    }));
+    })));
 
     const response = await app.inject({
       method: 'GET',
@@ -423,6 +423,7 @@ describe('/v1/videos routes', () => {
     });
 
     expect(response.statusCode).toBe(502);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
     expect(response.headers['content-type']).toContain('text/plain');
     expect(response.body).toBe('temporary unavailable');
   });
@@ -469,10 +470,10 @@ describe('/v1/videos routes', () => {
       tokenValue: 'sk-demo',
       accountId: 33,
     });
-    fetchMock.mockResolvedValue(new Response('temporary unavailable', {
+    fetchMock.mockImplementation(() => Promise.resolve(new Response('temporary unavailable', {
       status: 502,
       headers: { 'content-type': 'text/plain' },
-    }));
+    })));
 
     const response = await app.inject({
       method: 'DELETE',
@@ -480,6 +481,7 @@ describe('/v1/videos routes', () => {
     });
 
     expect(response.statusCode).toBe(502);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
     expect(response.headers['content-type']).toContain('text/plain');
     expect(response.body).toBe('temporary unavailable');
   });
