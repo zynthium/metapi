@@ -12,6 +12,7 @@ const recordFailureMock = vi.fn();
 const refreshModelsAndRebuildRoutesMock = vi.fn();
 const reportProxyAllFailedMock = vi.fn();
 const reportTokenExpiredMock = vi.fn();
+const shouldRetryProxyRequestMock = vi.fn(() => false);
 const estimateProxyCostMock = vi.fn(async (_arg?: any) => 0);
 const buildProxyBillingDetailsMock = vi.fn(async (_arg?: any) => null);
 const fetchModelPricingCatalogMock = vi.fn(async (_arg?: any): Promise<any> => null);
@@ -63,7 +64,7 @@ vi.mock('../../services/modelPricingService.js', () => ({
 }));
 
 vi.mock('../../services/proxyRetryPolicy.js', () => ({
-  shouldRetryProxyRequest: () => false,
+  shouldRetryProxyRequest: (...args: unknown[]) => shouldRetryProxyRequestMock(...args),
   shouldAbortSameSiteEndpointFallback: () => false,
   RETRYABLE_TIMEOUT_PATTERNS: [/(request timed out|connection timed out|read timeout|\btimed out\b)/i],
 }));
@@ -129,6 +130,8 @@ describe('chat proxy stream behavior', () => {
     refreshModelsAndRebuildRoutesMock.mockReset();
     reportProxyAllFailedMock.mockReset();
     reportTokenExpiredMock.mockReset();
+    shouldRetryProxyRequestMock.mockReset();
+    shouldRetryProxyRequestMock.mockReturnValue(false);
     estimateProxyCostMock.mockClear();
     buildProxyBillingDetailsMock.mockClear();
     fetchModelPricingCatalogMock.mockReset();
@@ -344,6 +347,69 @@ describe('chat proxy stream behavior', () => {
     expect(response.json()?.error?.message).toContain('empty content');
     expect(recordSuccessMock).not.toHaveBeenCalled();
     expect(recordFailureMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the same channel for four attempts before failing over to another channel', async () => {
+    (config as any).disableCrossProtocolFallback = true;
+    shouldRetryProxyRequestMock.mockReturnValue(true);
+    selectNextChannelMock.mockReturnValue({
+      channel: { id: 12, routeId: 22 },
+      site: { name: 'fallback-site', url: 'https://fallback.example.com' },
+      account: { id: 34, username: 'fallback-user' },
+      tokenName: 'fallback',
+      tokenValue: 'sk-fallback',
+      actualModel: 'upstream-fallback-gpt',
+    });
+
+    fetchMock
+      .mockResolvedValueOnce(new Response('upstream failed 1', { status: 503 }))
+      .mockResolvedValueOnce(new Response('upstream failed 2', { status: 503 }))
+      .mockResolvedValueOnce(new Response('upstream failed 3', { status: 503 }))
+      .mockResolvedValueOnce(new Response('upstream failed 4', { status: 503 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        id: 'chatcmpl-fallback',
+        object: 'chat.completion',
+        created: 1_706_000_000,
+        model: 'upstream-fallback-gpt',
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: 'ok from fallback' },
+          finish_reason: 'stop',
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }));
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()?.choices?.[0]?.message?.content).toBe('ok from fallback');
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(selectChannelMock).toHaveBeenCalledTimes(1);
+    expect(selectNextChannelMock).toHaveBeenCalledTimes(1);
+    expect(recordFailureMock).toHaveBeenCalledTimes(4);
+    expect(recordSuccessMock).toHaveBeenCalledTimes(1);
+
+    const authorizations = fetchMock.mock.calls.map((call) => {
+      const [, init] = call as [string, RequestInit];
+      return (init.headers as Record<string, string>)?.Authorization;
+    });
+    expect(authorizations.slice(0, 4)).toEqual([
+      'Bearer sk-demo',
+      'Bearer sk-demo',
+      'Bearer sk-demo',
+      'Bearer sk-demo',
+    ]);
+    expect(authorizations[4]).toBe('Bearer sk-fallback');
   });
 
   it('returns HTTP upstream_error instead of hijacking when streamed chat requests receive empty non-SSE payloads', async () => {

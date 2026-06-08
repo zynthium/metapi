@@ -8,6 +8,8 @@ type SelectedChannel = Awaited<ReturnType<typeof tokenRouter.selectChannel>>;
 
 export const TESTER_FORCED_CHANNEL_HEADER = 'x-metapi-tester-forced-channel-id';
 export const TESTER_REQUEST_HEADER = 'x-metapi-tester-request';
+// Attempts 1-4 stay on the selected channel; attempt 5 may fail over.
+const REQUEST_CHANNEL_FAILURES_BEFORE_FAILOVER = 4;
 
 function headerValueEquals(
   headers: Record<string, unknown> | undefined,
@@ -79,6 +81,28 @@ export function buildForcedChannelUnavailableMessage(forcedChannelId?: number | 
 export function canRetryChannelSelection(retryCount: number, forcedChannelId?: number | null): boolean {
   if (normalizeForcedChannelId(forcedChannelId) !== null) return false;
   return canRetryProxyChannel(retryCount);
+}
+
+export function recordRequestChannelFailure(
+  failureCounts: Map<number, number>,
+  channelId: number,
+): { failureCount: number; retrySameChannel: boolean } {
+  const normalizedChannelId = Math.trunc(channelId || 0);
+  if (normalizedChannelId <= 0) {
+    return { failureCount: REQUEST_CHANNEL_FAILURES_BEFORE_FAILOVER, retrySameChannel: false };
+  }
+  const failureCount = Math.max(0, failureCounts.get(normalizedChannelId) ?? 0) + 1;
+  failureCounts.set(normalizedChannelId, failureCount);
+  return {
+    failureCount,
+    retrySameChannel: failureCount < REQUEST_CHANNEL_FAILURES_BEFORE_FAILOVER,
+  };
+}
+
+export function excludeRequestChannel(excludeChannelIds: number[], channelId: number): void {
+  const normalizedChannelId = Math.trunc(channelId || 0);
+  if (normalizedChannelId <= 0 || excludeChannelIds.includes(normalizedChannelId)) return;
+  excludeChannelIds.push(normalizedChannelId);
 }
 
 export async function selectProxyChannelForAttempt(input: {

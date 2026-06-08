@@ -60,7 +60,10 @@ import {
 import {
   buildForcedChannelUnavailableMessage,
   canRetryChannelSelection,
+  excludeRequestChannel,
   getTesterForcedChannelId,
+  recordRequestChannelFailure,
+  selectProxyChannelForAttempt,
 } from '../channelSelection.js';
 const GEMINI_MODEL_PROBES = [
   'gemini-2.5-flash',
@@ -354,25 +357,41 @@ export async function geminiProxyRoute(app: FastifyInstance) {
       headers: request.headers as Record<string, unknown>,
       clientIp: request.ip,
     });
+    const channelFailureCounts = new Map<number, number>();
     let retryCount = 0;
+    let retrySelectedChannel: NonNullable<Awaited<ReturnType<typeof tokenRouter.selectChannel>>> | null = null;
     let lastStatus = 503;
     let lastText = 'No available channels for Gemini models';
     let lastContentType = 'application/json';
 
+    const retrySameChannelOrFailover = (
+      selected: NonNullable<Awaited<ReturnType<typeof tokenRouter.selectChannel>>>,
+    ): boolean => {
+      const decision = recordRequestChannelFailure(channelFailureCounts, selected.channel.id);
+      if (decision.retrySameChannel) {
+        retrySelectedChannel = selected;
+        return true;
+      }
+      excludeRequestChannel(excludeChannelIds, selected.channel.id);
+      if (!canRetryChannelSelection(retryCount, forcedChannelId)) return false;
+      retryCount += 1;
+      return true;
+    };
+
     while (retryCount <= getProxyMaxChannelRetries()) {
-      const selected = forcedChannelId !== null
+      const selected = retrySelectedChannel ?? (forcedChannelId !== null
         ? (retryCount === 0
           ? await selectPreferredGeminiProbeChannel(request, forcedChannelId, excludeChannelIds)
           : null)
         : (retryCount === 0
           ? await selectGeminiChannel(request)
-          : await selectNextGeminiProbeChannel(request, excludeChannelIds));
+          : await selectNextGeminiProbeChannel(request, excludeChannelIds)));
+      retrySelectedChannel = null;
       if (!selected) {
         await finalizeDebugFailure(lastStatus, lastText, null);
         return reply.code(lastStatus).type(lastContentType).send(lastText);
       }
 
-      excludeChannelIds.push(selected.channel.id);
       await safeUpdateSurfaceProxyDebugSelection(debugTrace, {
         stickySessionKey: null,
         stickyHitChannelId: null,
@@ -449,8 +468,7 @@ export async function geminiProxyRoute(app: FastifyInstance) {
             status: upstream.status,
             errorText: text,
           });
-          if (canRetryChannelSelection(retryCount, forcedChannelId)) {
-            retryCount += 1;
+          if (retrySameChannelOrFailover(selected)) {
             continue;
           }
           await finalizeDebugFailure(lastStatus, parseSurfaceProxyDebugTextPayload(lastText), upstreamPath);
@@ -478,8 +496,7 @@ export async function geminiProxyRoute(app: FastifyInstance) {
             type: 'upstream_error',
           },
         });
-        if (canRetryChannelSelection(retryCount, forcedChannelId)) {
-          retryCount += 1;
+        if (retrySameChannelOrFailover(selected)) {
           continue;
         }
         await finalizeDebugFailure(lastStatus, parseSurfaceProxyDebugTextPayload(lastText), null);
@@ -570,19 +587,36 @@ export async function geminiProxyRoute(app: FastifyInstance) {
       });
     };
     const excludeChannelIds: number[] = [];
+    const channelFailureCounts = new Map<number, number>();
     let retryCount = 0;
+    let retrySelectedChannel: NonNullable<Awaited<ReturnType<typeof selectProxyChannelForAttempt>>> | null = null;
     let lastStatus = 503;
     let lastText = 'No available channels for this model';
     let lastContentType = 'application/json';
 
+    const retrySameChannelOrFailover = (
+      selected: NonNullable<Awaited<ReturnType<typeof selectProxyChannelForAttempt>>>,
+    ): boolean => {
+      const decision = recordRequestChannelFailure(channelFailureCounts, selected.channel.id);
+      if (decision.retrySameChannel) {
+        retrySelectedChannel = selected;
+        return true;
+      }
+      excludeRequestChannel(excludeChannelIds, selected.channel.id);
+      if (!canRetryChannelSelection(retryCount, forcedChannelId)) return false;
+      retryCount += 1;
+      return true;
+    };
+
     while (retryCount <= getProxyMaxChannelRetries()) {
-      const selected = forcedChannelId !== null
-        ? (retryCount === 0
-          ? await tokenRouter.selectPreferredChannel(requestedModel, forcedChannelId, policy, excludeChannelIds)
-          : null)
-        : (retryCount === 0
-          ? await tokenRouter.selectChannel(requestedModel, policy)
-          : await tokenRouter.selectNextChannel(requestedModel, excludeChannelIds, policy));
+      const selected = retrySelectedChannel ?? await selectProxyChannelForAttempt({
+        requestedModel,
+        downstreamPolicy: policy,
+        excludeChannelIds,
+        retryCount,
+        forcedChannelId,
+      });
+      retrySelectedChannel = null;
       if (!selected) {
         if (forcedChannelId !== null) {
           lastStatus = 503;
@@ -598,7 +632,6 @@ export async function geminiProxyRoute(app: FastifyInstance) {
         return reply.code(lastStatus).type(lastContentType).send(lastText);
       }
 
-      excludeChannelIds.push(selected.channel.id);
       await safeUpdateSurfaceProxyDebugSelection(debugTrace, {
         stickySessionKey: null,
         stickyHitChannelId: null,
@@ -647,8 +680,7 @@ export async function geminiProxyRoute(app: FastifyInstance) {
               status: 500,
               errorText: 'Gemini CLI OAuth project is missing',
             });
-            if (canRetryChannelSelection(retryCount, forcedChannelId)) {
-              retryCount += 1;
+            if (retrySameChannelOrFailover(selected)) {
               continue;
             }
             await finalizeDebugFailure(lastStatus, parseSurfaceProxyDebugTextPayload(lastText), upstreamPath || null);
@@ -828,8 +860,7 @@ export async function geminiProxyRoute(app: FastifyInstance) {
               isStreamAction,
               firstByteLatencyMs,
             );
-            if (canRetryChannelSelection(retryCount, forcedChannelId)) {
-              retryCount += 1;
+            if (retrySameChannelOrFailover(selected)) {
               continue;
             }
 
@@ -1375,8 +1406,7 @@ export async function geminiProxyRoute(app: FastifyInstance) {
             isStreamAction,
             null,
           );
-          if (canRetryChannelSelection(retryCount, forcedChannelId)) {
-            retryCount += 1;
+          if (retrySameChannelOrFailover(selected)) {
             continue;
           }
           await finalizeDebugFailure(lastStatus, JSON.parse(lastText), null).catch(async () => {
@@ -1469,8 +1499,7 @@ export async function geminiProxyRoute(app: FastifyInstance) {
           isStreamAction,
           null,
         );
-        if (canRetryChannelSelection(retryCount, forcedChannelId)) {
-          retryCount += 1;
+        if (retrySameChannelOrFailover(selected)) {
           continue;
         }
         await finalizeDebugFailure(lastStatus, parseSurfaceProxyDebugTextPayload(lastText), upstreamPath || null);

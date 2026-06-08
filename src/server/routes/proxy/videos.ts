@@ -21,7 +21,9 @@ import { getProxyMaxChannelRetries } from '../../services/proxyChannelRetry.js';
 import {
   buildForcedChannelUnavailableMessage,
   canRetryChannelSelection,
+  excludeRequestChannel,
   getTesterForcedChannelId,
+  recordRequestChannelFailure,
   selectProxyChannelForAttempt,
 } from '../../proxy-core/channelSelection.js';
 import { runWithSiteApiEndpointPool, SiteApiEndpointRequestError } from '../../services/siteApiEndpointService.js';
@@ -60,16 +62,33 @@ export async function videosProxyRoute(app: FastifyInstance) {
       clientIp: request.ip,
     });
     const excludeChannelIds: number[] = [];
+    const channelFailureCounts = new Map<number, number>();
     let retryCount = 0;
+    let retrySelectedChannel: NonNullable<Awaited<ReturnType<typeof selectProxyChannelForAttempt>>> | null = null;
+
+    const retrySameChannelOrFailover = (
+      selected: NonNullable<Awaited<ReturnType<typeof selectProxyChannelForAttempt>>>,
+    ): boolean => {
+      const decision = recordRequestChannelFailure(channelFailureCounts, selected.channel.id);
+      if (decision.retrySameChannel) {
+        retrySelectedChannel = selected;
+        return true;
+      }
+      excludeRequestChannel(excludeChannelIds, selected.channel.id);
+      if (!canRetryChannelSelection(retryCount, forcedChannelId)) return false;
+      retryCount += 1;
+      return true;
+    };
 
     while (retryCount <= getProxyMaxChannelRetries()) {
-      const selected = await selectProxyChannelForAttempt({
+      const selected = retrySelectedChannel ?? await selectProxyChannelForAttempt({
         requestedModel,
         downstreamPolicy,
         excludeChannelIds,
         retryCount,
         forcedChannelId,
       });
+      retrySelectedChannel = null;
 
       if (!selected) {
         const noChannelMessage = buildForcedChannelUnavailableMessage(forcedChannelId);
@@ -82,7 +101,6 @@ export async function videosProxyRoute(app: FastifyInstance) {
         });
       }
 
-      excludeChannelIds.push(selected.channel.id);
       const upstreamModel = selected.actualModel || requestedModel;
       const startTime = Date.now();
 
@@ -175,8 +193,7 @@ export async function videosProxyRoute(app: FastifyInstance) {
           errorText,
           modelName: upstreamModel,
         }));
-        if ((status > 0 ? shouldRetryProxyRequest(status, errorText) : true) && canRetryChannelSelection(retryCount, forcedChannelId)) {
-          retryCount += 1;
+        if ((status > 0 ? shouldRetryProxyRequest(status, errorText) : true) && retrySameChannelOrFailover(selected)) {
           continue;
         }
         if (status > 0 && isTokenExpiredError({ status, message: errorText })) {

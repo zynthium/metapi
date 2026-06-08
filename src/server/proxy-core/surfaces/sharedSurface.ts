@@ -518,9 +518,7 @@ export function createSurfaceFailureToolkit(input: {
     });
   };
 
-  const maybeRetry = (retryCount: number) => retryCount < input.maxRetries
-    ? { action: 'retry' as const }
-    : null;
+  const retry = { action: 'retry' as const };
 
   const runBestEffort = (label: string, fn: () => Promise<unknown>) => {
     void Promise.resolve()
@@ -568,8 +566,7 @@ export function createSurfaceFailureToolkit(input: {
       }));
 
       if (shouldRetryProxyRequest(args.status, args.errText)) {
-        const retry = maybeRetry(args.retryCount);
-        if (retry) return retry;
+        return retry;
       }
 
       if (isTokenExpiredError({ status: args.status, message: args.errText })) {
@@ -634,8 +631,7 @@ export function createSurfaceFailureToolkit(input: {
       });
 
       if (shouldRetryProxyRequest(args.failure.status, args.failure.reason)) {
-        const retry = maybeRetry(args.retryCount);
-        if (retry) return retry;
+        return retry;
       }
 
       runBestEffort('report proxy all failed', () => reportProxyAllFailed({
@@ -681,24 +677,7 @@ export function createSurfaceFailureToolkit(input: {
         retryCount: args.retryCount,
       });
 
-      const retry = maybeRetry(args.retryCount);
-      if (retry) return retry;
-
-      runBestEffort('report proxy all failed', () => reportProxyAllFailed({
-        model: args.requestedModel,
-        reason: args.errorMessage || 'network failure',
-      }));
-
-      return {
-        action: 'respond',
-        status: 502,
-        payload: {
-          error: {
-            message: `Upstream error: ${args.errorMessage || 'network failure'}`,
-            type: 'upstream_error',
-          },
-        },
-      };
+      return retry;
     },
 
     async recordStreamFailure(args: {

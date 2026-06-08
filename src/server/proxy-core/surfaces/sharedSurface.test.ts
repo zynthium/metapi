@@ -746,7 +746,7 @@ describe('selectSurfaceChannelForAttempt', () => {
     expect(recordOauthQuotaResetHintMock).not.toHaveBeenCalled();
   });
 
-  it('returns a terminal 502 for exhausted network failures through the shared failure toolkit', async () => {
+  it('leaves retryable network failure exhaustion to the request-level failover helper', async () => {
     composeProxyLogMessageMock.mockReturnValue('normalized error');
     formatUtcSqlDateTimeMock.mockReturnValue('2026-03-21 22:00:00');
     insertProxyLogMock.mockResolvedValue(undefined);
@@ -774,24 +774,12 @@ describe('selectSurfaceChannelForAttempt', () => {
       retryCount: 2,
     });
 
-    expect(result).toEqual({
-      action: 'respond',
-      status: 502,
-      payload: {
-        error: {
-          message: 'Upstream error: socket hang up',
-          type: 'upstream_error',
-        },
-      },
-    });
+    expect(result).toEqual({ action: 'retry' });
     expect(recordFailureMock).toHaveBeenCalledWith(11, {
       errorText: 'socket hang up',
       modelName: 'upstream-model',
     });
-    expect(reportProxyAllFailedMock).toHaveBeenCalledWith({
-      model: 'gpt-5.2',
-      reason: 'socket hang up',
-    });
+    expect(reportProxyAllFailedMock).not.toHaveBeenCalled();
   });
 
   it('records stream failures with error text even without a runtime status code', async () => {

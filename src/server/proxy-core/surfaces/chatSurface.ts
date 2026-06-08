@@ -83,7 +83,9 @@ import {
 import {
   buildForcedChannelUnavailableMessage,
   canRetryChannelSelection,
+  excludeRequestChannel,
   getTesterForcedChannelId,
+  recordRequestChannelFailure,
 } from '../channelSelection.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -234,13 +236,30 @@ export async function handleChatSurfaceRequest(
   };
 
   const excludeChannelIds: number[] = [];
+  const channelFailureCounts = new Map<number, number>();
   let retryCount = 0;
+  let retrySelectedChannel: NonNullable<Awaited<ReturnType<typeof selectSurfaceChannelForAttempt>>> | null = null;
+  let lastRetryFailureOutcome: ReturnType<typeof finalizeRetryAsUpstreamFailure> | ReturnType<typeof finalizeRetryAsExecutionFailure> | null = null;
+
+  const retrySameChannelOrFailover = (
+    selected: NonNullable<Awaited<ReturnType<typeof selectSurfaceChannelForAttempt>>>,
+  ): boolean => {
+    const decision = recordRequestChannelFailure(channelFailureCounts, selected.channel.id);
+    if (decision.retrySameChannel) {
+      retrySelectedChannel = selected;
+      return true;
+    }
+    excludeRequestChannel(excludeChannelIds, selected.channel.id);
+    if (!canRetryChannelSelection(retryCount, forcedChannelId)) return false;
+    retryCount += 1;
+    return true;
+  };
 
   while (retryCount <= maxRetries) {
     const stickyPreferredChannelId = retryCount === 0
       ? getSurfaceStickyPreferredChannelId(stickySessionKey)
       : null;
-    const selected = await selectSurfaceChannelForAttempt({
+    const selected = retrySelectedChannel ?? await selectSurfaceChannelForAttempt({
       requestedModel,
       downstreamPolicy,
       excludeChannelIds,
@@ -248,8 +267,13 @@ export async function handleChatSurfaceRequest(
       stickySessionKey,
       forcedChannelId,
     });
+    retrySelectedChannel = null;
 
     if (!selected) {
+      if (lastRetryFailureOutcome) {
+        await finalizeDebugFailure(lastRetryFailureOutcome.status, lastRetryFailureOutcome.payload, null);
+        return reply.code(lastRetryFailureOutcome.status).send(lastRetryFailureOutcome.payload);
+      }
       const noChannelMessage = buildForcedChannelUnavailableMessage(forcedChannelId);
       await reportProxyAllFailed({
         model: requestedModel,
@@ -264,7 +288,6 @@ export async function handleChatSurfaceRequest(
       });
     }
 
-    excludeChannelIds.push(selected.channel.id);
     await safeUpdateSurfaceProxyDebugSelection(debugTrace, {
       stickySessionKey,
       stickyHitChannelId: (
@@ -527,6 +550,7 @@ export async function handleChatSurfaceRequest(
         errorMessage: busyMessage,
         retryCount,
       });
+      excludeRequestChannel(excludeChannelIds, selected.channel.id);
       if (canRetryChannelSelection(retryCount, forcedChannelId)) {
         retryCount += 1;
         continue;
@@ -731,13 +755,12 @@ export async function handleChatSurfaceRequest(
               totalTokens: parsedUsage.totalTokens,
               upstreamPath: successfulUpstreamPath,
             });
-            const terminalFailureOutcome = failureOutcome.action === 'retry'
-              ? (canRetryChannelSelection(retryCount, forcedChannelId)
-                ? null
-                : finalizeRetryAsUpstreamFailure(failure.status, failure.reason))
-              : failureOutcome;
+            let terminalFailureOutcome: ReturnType<typeof finalizeRetryAsUpstreamFailure> | ReturnType<typeof finalizeRetryAsExecutionFailure> | null = failureOutcome.action === 'retry' ? null : failureOutcome;
+            if (failureOutcome.action === 'retry') {
+              lastRetryFailureOutcome = finalizeRetryAsUpstreamFailure(failure.status, failure.reason);
+              terminalFailureOutcome = retrySameChannelOrFailover(selected) ? null : lastRetryFailureOutcome;
+            }
             if (!terminalFailureOutcome) {
-              retryCount += 1;
               continue;
             }
             await finalizeDebugFailure(
@@ -933,13 +956,12 @@ export async function handleChatSurfaceRequest(
           totalTokens: parsedUsage.totalTokens,
           upstreamPath: successfulUpstreamPath,
         });
-        const terminalFailureOutcome = failureOutcome.action === 'retry'
-          ? (canRetryChannelSelection(retryCount, forcedChannelId)
-            ? null
-            : finalizeRetryAsUpstreamFailure(failure.status, failure.reason))
-          : failureOutcome;
+        let terminalFailureOutcome: ReturnType<typeof finalizeRetryAsUpstreamFailure> | ReturnType<typeof finalizeRetryAsExecutionFailure> | null = failureOutcome.action === 'retry' ? null : failureOutcome;
+        if (failureOutcome.action === 'retry') {
+          lastRetryFailureOutcome = finalizeRetryAsUpstreamFailure(failure.status, failure.reason);
+          terminalFailureOutcome = retrySameChannelOrFailover(selected) ? null : lastRetryFailureOutcome;
+        }
         if (!terminalFailureOutcome) {
-          retryCount += 1;
           continue;
         }
         await finalizeDebugFailure(
@@ -1025,13 +1047,12 @@ export async function handleChatSurfaceRequest(
           latencyMs: Date.now() - startTime,
           retryCount,
         });
-        const terminalFailureOutcome = failureOutcome.action === 'retry'
-          ? (canRetryChannelSelection(retryCount, forcedChannelId)
-            ? null
-            : finalizeRetryAsUpstreamFailure(endpointFailureStatus || 502, err.message || 'unknown error'))
-          : failureOutcome;
+        let terminalFailureOutcome: ReturnType<typeof finalizeRetryAsUpstreamFailure> | ReturnType<typeof finalizeRetryAsExecutionFailure> | null = failureOutcome.action === 'retry' ? null : failureOutcome;
+        if (failureOutcome.action === 'retry') {
+          lastRetryFailureOutcome = finalizeRetryAsUpstreamFailure(endpointFailureStatus || 502, err.message || 'unknown error');
+          terminalFailureOutcome = retrySameChannelOrFailover(selected) ? null : lastRetryFailureOutcome;
+        }
         if (!terminalFailureOutcome) {
-          retryCount += 1;
           continue;
         }
         await finalizeDebugFailure(
@@ -1050,13 +1071,12 @@ export async function handleChatSurfaceRequest(
         latencyMs: Date.now() - startTime,
         retryCount,
       });
-      const terminalFailureOutcome = failureOutcome.action === 'retry'
-        ? (canRetryChannelSelection(retryCount, forcedChannelId)
-          ? null
-          : finalizeRetryAsExecutionFailure(err?.message || 'network failure'))
-        : failureOutcome;
+      let terminalFailureOutcome: ReturnType<typeof finalizeRetryAsUpstreamFailure> | ReturnType<typeof finalizeRetryAsExecutionFailure> | null = failureOutcome.action === 'retry' ? null : failureOutcome;
+      if (failureOutcome.action === 'retry') {
+        lastRetryFailureOutcome = finalizeRetryAsExecutionFailure(err?.message || 'network failure');
+        terminalFailureOutcome = retrySameChannelOrFailover(selected) ? null : lastRetryFailureOutcome;
+      }
       if (!terminalFailureOutcome) {
-        retryCount += 1;
         continue;
       }
       await finalizeDebugFailure(
@@ -1176,13 +1196,30 @@ export async function handleClaudeCountTokensSurfaceRequest(
     });
   };
   const excludeChannelIds: number[] = [];
+  const channelFailureCounts = new Map<number, number>();
   let retryCount = 0;
+  let retrySelectedChannel: NonNullable<Awaited<ReturnType<typeof selectSurfaceChannelForAttempt>>> | null = null;
+  let lastRetryFailureOutcome: ReturnType<typeof finalizeRetryAsUpstreamFailure> | ReturnType<typeof finalizeRetryAsExecutionFailure> | null = null;
+
+  const retrySameChannelOrFailover = (
+    selected: NonNullable<Awaited<ReturnType<typeof selectSurfaceChannelForAttempt>>>,
+  ): boolean => {
+    const decision = recordRequestChannelFailure(channelFailureCounts, selected.channel.id);
+    if (decision.retrySameChannel) {
+      retrySelectedChannel = selected;
+      return true;
+    }
+    excludeRequestChannel(excludeChannelIds, selected.channel.id);
+    if (!canRetryChannelSelection(retryCount, forcedChannelId)) return false;
+    retryCount += 1;
+    return true;
+  };
 
   while (retryCount <= maxRetries) {
     const stickyPreferredChannelId = retryCount === 0
       ? getSurfaceStickyPreferredChannelId(stickySessionKey)
       : null;
-    const selected = await selectSurfaceChannelForAttempt({
+    const selected = retrySelectedChannel ?? await selectSurfaceChannelForAttempt({
       requestedModel,
       downstreamPolicy,
       excludeChannelIds,
@@ -1190,8 +1227,13 @@ export async function handleClaudeCountTokensSurfaceRequest(
       stickySessionKey,
       forcedChannelId,
     });
+    retrySelectedChannel = null;
 
     if (!selected) {
+      if (lastRetryFailureOutcome) {
+        await finalizeDebugFailure(lastRetryFailureOutcome.status, lastRetryFailureOutcome.payload, null);
+        return reply.code(lastRetryFailureOutcome.status).send(lastRetryFailureOutcome.payload);
+      }
       const noChannelMessage = buildForcedChannelUnavailableMessage(forcedChannelId);
       await reportProxyAllFailed({
         model: requestedModel,
@@ -1205,7 +1247,6 @@ export async function handleClaudeCountTokensSurfaceRequest(
       });
     }
 
-    excludeChannelIds.push(selected.channel.id);
     await safeUpdateSurfaceProxyDebugSelection(debugTrace, {
       stickySessionKey,
       stickyHitChannelId: (
@@ -1250,6 +1291,7 @@ export async function handleClaudeCountTokensSurfaceRequest(
       },
     });
     if (endpointCandidates.length === 0) {
+      excludeRequestChannel(excludeChannelIds, selected.channel.id);
       if (canRetryChannelSelection(retryCount, forcedChannelId)) {
         retryCount += 1;
         continue;
@@ -1288,6 +1330,7 @@ export async function handleClaudeCountTokensSurfaceRequest(
         errorMessage: busyMessage,
         retryCount,
       });
+      excludeRequestChannel(excludeChannelIds, selected.channel.id);
       if (canRetryChannelSelection(retryCount, forcedChannelId)) {
         retryCount += 1;
         continue;
@@ -1473,15 +1516,14 @@ export async function handleClaudeCountTokensSurfaceRequest(
           latencyMs: Date.now() - startTime,
           retryCount,
         });
-        const terminalFailureOutcome = failureOutcome.action === 'retry'
-          ? (canRetryChannelSelection(retryCount, forcedChannelId)
-            ? null
-            : finalizeRetryAsUpstreamFailure(endpointFailureStatus || 502, error.message || 'unknown error'))
-          : failureOutcome;
-        if (!terminalFailureOutcome) {
-          retryCount += 1;
-          continue;
-        }
+      let terminalFailureOutcome: ReturnType<typeof finalizeRetryAsUpstreamFailure> | ReturnType<typeof finalizeRetryAsExecutionFailure> | null = failureOutcome.action === 'retry' ? null : failureOutcome;
+      if (failureOutcome.action === 'retry') {
+        lastRetryFailureOutcome = finalizeRetryAsUpstreamFailure(endpointFailureStatus || 502, error.message || 'unknown error');
+        terminalFailureOutcome = retrySameChannelOrFailover(selected) ? null : lastRetryFailureOutcome;
+      }
+      if (!terminalFailureOutcome) {
+        continue;
+      }
         await finalizeDebugFailure(terminalFailureOutcome.status, terminalFailureOutcome.payload, null);
         return reply.code(terminalFailureOutcome.status).send(terminalFailureOutcome.payload);
       }
@@ -1494,13 +1536,12 @@ export async function handleClaudeCountTokensSurfaceRequest(
         latencyMs: Date.now() - startTime,
         retryCount,
       });
-      const terminalFailureOutcome = failureOutcome.action === 'retry'
-        ? (canRetryChannelSelection(retryCount, forcedChannelId)
-          ? null
-          : finalizeRetryAsExecutionFailure(error?.message || 'network failure'))
-        : failureOutcome;
+      let terminalFailureOutcome: ReturnType<typeof finalizeRetryAsUpstreamFailure> | ReturnType<typeof finalizeRetryAsExecutionFailure> | null = failureOutcome.action === 'retry' ? null : failureOutcome;
+      if (failureOutcome.action === 'retry') {
+        lastRetryFailureOutcome = finalizeRetryAsExecutionFailure(error?.message || 'network failure');
+        terminalFailureOutcome = retrySameChannelOrFailover(selected) ? null : lastRetryFailureOutcome;
+      }
       if (!terminalFailureOutcome) {
-        retryCount += 1;
         continue;
       }
       await finalizeDebugFailure(terminalFailureOutcome.status, terminalFailureOutcome.payload, null);

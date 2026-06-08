@@ -217,6 +217,27 @@ export async function executeEndpointFlow(input: ExecuteEndpointFlowInput): Prom
 
       rawErrText = baseContext.rawErrText;
       response = baseContext.response;
+      const errText = withUpstreamPath(
+        baseContext.request.path,
+        summarizeUpstreamError(response.status, rawErrText),
+      );
+      const shouldDowngradeBeforeForbiddenRetry = (
+        response.status === 403
+        && !input.disableCrossProtocolFallback
+        && !isLastEndpoint
+        && !!input.shouldDowngrade?.(baseContext)
+      );
+      if (shouldDowngradeBeforeForbiddenRetry) {
+        await runEndpointFlowHook(input.onAttemptFailure, {
+          ...baseContext,
+          errText,
+        }, 'onAttemptFailure');
+        await runEndpointFlowHook(input.onDowngrade, {
+          ...baseContext,
+          errText,
+        }, 'onDowngrade');
+        continue endpointLoop;
+      }
       if (
         response.status === 403
         && shouldRetryForbiddenOnSameChannel(response.status, forbiddenSameEndpointRetryCount)
@@ -224,10 +245,6 @@ export async function executeEndpointFlow(input: ExecuteEndpointFlowInput): Prom
         forbiddenSameEndpointRetryCount += 1;
         continue;
       }
-      const errText = withUpstreamPath(
-        baseContext.request.path,
-        summarizeUpstreamError(response.status, rawErrText),
-      );
       await runEndpointFlowHook(input.onAttemptFailure, {
         ...baseContext,
         errText,

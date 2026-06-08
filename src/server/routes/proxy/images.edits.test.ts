@@ -208,7 +208,7 @@ describe('/v1/images/edits route', () => {
       created: 2,
       data: [{ b64_json: 'ZmFsbGJhY2s=' }],
     });
-    expect(selectNextChannelMock).toHaveBeenCalledTimes(1);
+    expect(selectNextChannelMock).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 

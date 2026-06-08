@@ -404,12 +404,12 @@ describe('responses proxy codex oauth refresh', () => {
   });
 
   it('does not refresh codex oauth token on non-auth 403 responses', async () => {
-    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+    fetchMock.mockImplementation(() => Promise.resolve(new Response(JSON.stringify({
       error: { message: 'quota exceeded for workspace', type: 'usage_limit_reached' },
     }), {
       status: 403,
       headers: { 'content-type': 'application/json' },
-    }));
+    })));
 
     const response = await app.inject({
       method: 'POST',
@@ -422,7 +422,7 @@ describe('responses proxy codex oauth refresh', () => {
 
     expect(response.statusCode).toBe(403);
     expect(refreshOauthAccessTokenSingleflightMock).not.toHaveBeenCalled();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(6);
     expect(response.json()).toMatchObject({
       error: {
         message: expect.stringContaining('quota exceeded for workspace'),

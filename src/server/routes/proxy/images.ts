@@ -23,7 +23,9 @@ import { retryForbiddenResponseOnSameChannel } from '../../proxy-core/orchestrat
 import {
   buildForcedChannelUnavailableMessage,
   canRetryChannelSelection,
+  excludeRequestChannel,
   getTesterForcedChannelId,
+  recordRequestChannelFailure,
   selectProxyChannelForAttempt,
 } from '../../proxy-core/channelSelection.js';
 
@@ -48,16 +50,33 @@ export async function imagesProxyRoute(app: FastifyInstance) {
     });
     const firstByteTimeoutMs = Math.max(0, Math.trunc((config.proxyFirstByteTimeoutSec || 0) * 1000));
     const excludeChannelIds: number[] = [];
+    const channelFailureCounts = new Map<number, number>();
     let retryCount = 0;
+    let retrySelectedChannel: NonNullable<Awaited<ReturnType<typeof selectProxyChannelForAttempt>>> | null = null;
+
+    const retrySameChannelOrFailover = (
+      selected: NonNullable<Awaited<ReturnType<typeof selectProxyChannelForAttempt>>>,
+    ): boolean => {
+      const decision = recordRequestChannelFailure(channelFailureCounts, selected.channel.id);
+      if (decision.retrySameChannel) {
+        retrySelectedChannel = selected;
+        return true;
+      }
+      excludeRequestChannel(excludeChannelIds, selected.channel.id);
+      if (!canRetryChannelSelection(retryCount, forcedChannelId)) return false;
+      retryCount += 1;
+      return true;
+    };
 
     while (retryCount <= getProxyMaxChannelRetries()) {
-      const selected = await selectProxyChannelForAttempt({
+      const selected = retrySelectedChannel ?? await selectProxyChannelForAttempt({
         requestedModel,
         downstreamPolicy,
         excludeChannelIds,
         retryCount,
         forcedChannelId,
       });
+      retrySelectedChannel = null;
 
       if (!selected) {
         const noChannelMessage = buildForcedChannelUnavailableMessage(forcedChannelId);
@@ -70,7 +89,6 @@ export async function imagesProxyRoute(app: FastifyInstance) {
         });
       }
 
-      excludeChannelIds.push(selected.channel.id);
       const upstreamModel = selected.actualModel || requestedModel;
       const forwardBody = { ...body, model: upstreamModel };
       const startTime = Date.now();
@@ -133,8 +151,7 @@ export async function imagesProxyRoute(app: FastifyInstance) {
             false,
             firstByteLatencyMs,
           );
-          if (canRetryChannelSelection(retryCount, forcedChannelId)) {
-            retryCount++;
+          if (retrySameChannelOrFailover(selected)) {
             continue;
           }
           await reportProxyAllFailed({
@@ -205,8 +222,7 @@ export async function imagesProxyRoute(app: FastifyInstance) {
           false,
           firstByteLatencyMs,
         );
-        if ((status > 0 ? shouldRetryProxyRequest(status, errorText) : true) && canRetryChannelSelection(retryCount, forcedChannelId)) {
-          retryCount++;
+        if ((status > 0 ? shouldRetryProxyRequest(status, errorText) : true) && retrySameChannelOrFailover(selected)) {
           continue;
         }
         if (status > 0 && isTokenExpiredError({ status, message: errorText })) {
@@ -255,16 +271,33 @@ export async function imagesProxyRoute(app: FastifyInstance) {
     });
     const firstByteTimeoutMs = Math.max(0, Math.trunc((config.proxyFirstByteTimeoutSec || 0) * 1000));
     const excludeChannelIds: number[] = [];
+    const channelFailureCounts = new Map<number, number>();
     let retryCount = 0;
+    let retrySelectedChannel: NonNullable<Awaited<ReturnType<typeof selectProxyChannelForAttempt>>> | null = null;
+
+    const retrySameChannelOrFailover = (
+      selected: NonNullable<Awaited<ReturnType<typeof selectProxyChannelForAttempt>>>,
+    ): boolean => {
+      const decision = recordRequestChannelFailure(channelFailureCounts, selected.channel.id);
+      if (decision.retrySameChannel) {
+        retrySelectedChannel = selected;
+        return true;
+      }
+      excludeRequestChannel(excludeChannelIds, selected.channel.id);
+      if (!canRetryChannelSelection(retryCount, forcedChannelId)) return false;
+      retryCount += 1;
+      return true;
+    };
 
     while (retryCount <= getProxyMaxChannelRetries()) {
-      const selected = await selectProxyChannelForAttempt({
+      const selected = retrySelectedChannel ?? await selectProxyChannelForAttempt({
         requestedModel,
         downstreamPolicy,
         excludeChannelIds,
         retryCount,
         forcedChannelId,
       });
+      retrySelectedChannel = null;
 
       if (!selected) {
         const noChannelMessage = buildForcedChannelUnavailableMessage(forcedChannelId);
@@ -277,7 +310,6 @@ export async function imagesProxyRoute(app: FastifyInstance) {
         });
       }
 
-      excludeChannelIds.push(selected.channel.id);
       const upstreamModel = selected.actualModel || requestedModel;
       const startTime = Date.now();
 
@@ -357,8 +389,7 @@ export async function imagesProxyRoute(app: FastifyInstance) {
             false,
             firstByteLatencyMs,
           );
-          if (canRetryChannelSelection(retryCount, forcedChannelId)) {
-            retryCount++;
+          if (retrySameChannelOrFailover(selected)) {
             continue;
           }
           await reportProxyAllFailed({
@@ -429,8 +460,7 @@ export async function imagesProxyRoute(app: FastifyInstance) {
           false,
           firstByteLatencyMs,
         );
-        if ((status > 0 ? shouldRetryProxyRequest(status, errorText) : true) && canRetryChannelSelection(retryCount, forcedChannelId)) {
-          retryCount++;
+        if ((status > 0 ? shouldRetryProxyRequest(status, errorText) : true) && retrySameChannelOrFailover(selected)) {
           continue;
         }
         if (status > 0 && isTokenExpiredError({ status, message: errorText })) {
