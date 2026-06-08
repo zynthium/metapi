@@ -1,4 +1,5 @@
-export const FORBIDDEN_SAME_CHANNEL_MAX_RETRIES = 5;
+// Total raw upstream fetch attempts for transient 403s on the same endpoint.
+export const FORBIDDEN_SAME_CHANNEL_MAX_ATTEMPTS = 5;
 
 type RetryableResponse = {
   ok: boolean;
@@ -10,7 +11,7 @@ type RetryableResponse = {
 };
 
 export function shouldRetryForbiddenOnSameChannel(status: number, retryCount: number): boolean {
-  return status === 403 && retryCount < FORBIDDEN_SAME_CHANNEL_MAX_RETRIES;
+  return status === 403 && retryCount < FORBIDDEN_SAME_CHANNEL_MAX_ATTEMPTS - 1;
 }
 
 async function discardResponseBody(response: RetryableResponse): Promise<void> {

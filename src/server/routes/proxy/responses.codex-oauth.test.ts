@@ -422,7 +422,7 @@ describe('responses proxy codex oauth refresh', () => {
 
     expect(response.statusCode).toBe(403);
     expect(refreshOauthAccessTokenSingleflightMock).not.toHaveBeenCalled();
-    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
     expect(response.json()).toMatchObject({
       error: {
         message: expect.stringContaining('quota exceeded for workspace'),

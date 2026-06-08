@@ -282,7 +282,6 @@ describe('chat proxy site api endpoint rotation', () => {
       .mockResolvedValueOnce(new Response('transient forbidden 2', { status: 403 }))
       .mockResolvedValueOnce(new Response('transient forbidden 3', { status: 403 }))
       .mockResolvedValueOnce(new Response('transient forbidden 4', { status: 403 }))
-      .mockResolvedValueOnce(new Response('transient forbidden 5', { status: 403 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
         id: 'chatcmpl-after-403',
         object: 'chat.completion',
@@ -310,7 +309,7 @@ describe('chat proxy site api endpoint rotation', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()?.choices?.[0]?.message?.content).toBe('ok after transient 403');
-    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
     expect(selectChannelMock).toHaveBeenCalledTimes(1);
     expect(selectNextChannelMock).not.toHaveBeenCalled();
     expect(recordFailureMock).not.toHaveBeenCalled();
