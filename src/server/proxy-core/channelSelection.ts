@@ -8,8 +8,9 @@ type SelectedChannel = Awaited<ReturnType<typeof tokenRouter.selectChannel>>;
 
 export const TESTER_FORCED_CHANNEL_HEADER = 'x-metapi-tester-forced-channel-id';
 export const TESTER_REQUEST_HEADER = 'x-metapi-tester-request';
-// Attempts 1-4 stay on the selected channel; attempt 5 may fail over.
-const REQUEST_CHANNEL_FAILURES_BEFORE_FAILOVER = 4;
+// A selected channel gets one full request attempt, including any same-endpoint
+// retry budget owned by the request executor, before request-level failover.
+const REQUEST_CHANNEL_FAILURES_BEFORE_FAILOVER = 1;
 
 function headerValueEquals(
   headers: Record<string, unknown> | undefined,

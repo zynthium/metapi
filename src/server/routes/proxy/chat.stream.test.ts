@@ -354,7 +354,7 @@ describe('chat proxy stream behavior', () => {
     expect(recordFailureMock).toHaveBeenCalledTimes(1);
   });
 
-  it('uses the same channel for four attempts before failing over to another channel', async () => {
+  it('fails over to another channel after the selected channel exhausts one request attempt', async () => {
     (config as any).disableCrossProtocolFallback = true;
     shouldRetryProxyRequestMock.mockReturnValue(true);
     selectNextChannelMock.mockReturnValue({
@@ -368,9 +368,6 @@ describe('chat proxy stream behavior', () => {
 
     fetchMock
       .mockResolvedValueOnce(new Response('upstream failed 1', { status: 503 }))
-      .mockResolvedValueOnce(new Response('upstream failed 2', { status: 503 }))
-      .mockResolvedValueOnce(new Response('upstream failed 3', { status: 503 }))
-      .mockResolvedValueOnce(new Response('upstream failed 4', { status: 503 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
         id: 'chatcmpl-fallback',
         object: 'chat.completion',
@@ -398,23 +395,20 @@ describe('chat proxy stream behavior', () => {
 
     expect(response.statusCode, response.body).toBe(200);
     expect(response.json()?.choices?.[0]?.message?.content).toBe('ok from fallback');
-    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(selectChannelMock).toHaveBeenCalledTimes(1);
     expect(selectNextChannelMock).toHaveBeenCalledTimes(1);
-    expect(recordFailureMock).toHaveBeenCalledTimes(4);
+    expect(recordFailureMock).toHaveBeenCalledTimes(1);
     expect(recordSuccessMock).toHaveBeenCalledTimes(1);
 
     const authorizations = fetchMock.mock.calls.map((call) => {
       const [, init] = call as [string, RequestInit];
       return (init.headers as Record<string, string>)?.Authorization;
     });
-    expect(authorizations.slice(0, 4)).toEqual([
+    expect(authorizations).toEqual([
       'Bearer sk-demo',
-      'Bearer sk-demo',
-      'Bearer sk-demo',
-      'Bearer sk-demo',
+      'Bearer sk-fallback',
     ]);
-    expect(authorizations[4]).toBe('Bearer sk-fallback');
   });
 
   it('returns HTTP upstream_error instead of hijacking when streamed chat requests receive empty non-SSE payloads', async () => {

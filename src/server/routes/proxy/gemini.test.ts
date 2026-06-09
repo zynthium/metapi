@@ -280,7 +280,7 @@ describe('gemini native proxy routes', () => {
     });
   });
 
-  it('retries the same channel for listModels when the first Gemini request fails once', async () => {
+  it('fails over to the next channel for listModels after the first Gemini request fails once', async () => {
     selectNextChannelMock.mockReturnValue({
       channel: { id: 12, routeId: 22 },
       site: { id: 45, name: 'gemini-site-2', url: 'https://generativelanguage.googleapis.com', platform: 'gemini' },
@@ -323,8 +323,8 @@ describe('gemini native proxy routes', () => {
     const [firstUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
     const [secondUrl] = fetchMock.mock.calls[1] as [string, RequestInit];
     expect(firstUrl).toContain('key=gemini-key');
-    expect(secondUrl).toContain('key=gemini-key');
-    expect(selectNextChannelMock).not.toHaveBeenCalled();
+    expect(secondUrl).toContain('key=gemini-key-2');
+    expect(selectNextChannelMock).toHaveBeenCalledTimes(1);
   });
 
   it('pins /v1beta/models to the forced tester channel when present', async () => {
@@ -1930,7 +1930,7 @@ describe('gemini native proxy routes', () => {
     expect(recordFailureMock).not.toHaveBeenCalled();
   });
 
-  it('retries the same channel when the first Gemini channel returns 400 before any bytes are written', async () => {
+  it('fails over to the next channel when the first Gemini channel returns 400 before any bytes are written', async () => {
     selectNextChannelMock.mockReturnValue({
       channel: { id: 12, routeId: 22 },
       site: { id: 45, name: 'gemini-site-2', url: 'https://generativelanguage.googleapis.com', platform: 'gemini' },
@@ -1979,8 +1979,8 @@ describe('gemini native proxy routes', () => {
     const [firstUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
     const [secondUrl] = fetchMock.mock.calls[1] as [string, RequestInit];
     expect(firstUrl).toContain('key=gemini-key');
-    expect(secondUrl).toContain('key=gemini-key');
-    expect(selectNextChannelMock).not.toHaveBeenCalled();
+    expect(secondUrl).toContain('key=gemini-key-2');
+    expect(selectNextChannelMock).toHaveBeenCalledTimes(1);
     expect(response.json().candidates?.[0]?.content?.parts?.[0]?.text).toContain('ok from fallback');
   });
 
@@ -2223,15 +2223,15 @@ describe('gemini native proxy routes', () => {
       errorMessage: '[downstream:/v1beta/models/gemini-2.5-flash:streamGenerateContent] [upstream:/v1beta/models/gemini-2.5-flash:streamGenerateContent] {\"error\":{\"message\":\"upstream unavailable\"}}',
     }));
     expect(dbInsertValuesMock).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      channelId: 11,
+      channelId: 12,
       status: 'success',
       httpStatus: 200,
-      retryCount: 0,
+      retryCount: 1,
       promptTokens: 11,
       completionTokens: 6,
       totalTokens: 17,
       errorMessage: '[downstream:/v1beta/models/gemini-2.5-flash:streamGenerateContent] [upstream:/v1beta/models/gemini-2.5-flash:streamGenerateContent]',
     }));
-    expect(recordSuccessMock).toHaveBeenCalledWith(11, expect.any(Number), 0, 'gemini-2.5-flash');
+    expect(recordSuccessMock).toHaveBeenCalledWith(12, expect.any(Number), 0, 'gemini-2.5-flash');
   });
 });

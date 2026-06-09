@@ -208,8 +208,12 @@ describe('/v1/images/edits route', () => {
       created: 2,
       data: [{ b64_json: 'ZmFsbGJhY2s=' }],
     });
-    expect(selectNextChannelMock).not.toHaveBeenCalled();
+    expect(selectNextChannelMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [firstUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [secondUrl] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(firstUrl).toBe('https://upstream.example.com/v1/images/generations');
+    expect(secondUrl).toBe('https://fallback.example.com/v1/images/generations');
   });
 
   it('keeps returning a successful image edit response when post-success accounting fails', async () => {

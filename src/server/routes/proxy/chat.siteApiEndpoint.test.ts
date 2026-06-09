@@ -13,6 +13,7 @@ const selectNextChannelMock = vi.fn();
 const recordSuccessMock = vi.fn();
 const recordFailureMock = vi.fn();
 const refreshModelsAndRebuildRoutesMock = vi.fn();
+const shouldRetryProxyRequestMock = vi.fn(() => false);
 const reportProxyAllFailedMock = vi.fn();
 const reportTokenExpiredMock = vi.fn();
 const estimateProxyCostMock = vi.fn(async (_arg?: any) => 0);
@@ -62,7 +63,7 @@ vi.mock('../../services/modelPricingService.js', () => ({
 }));
 
 vi.mock('../../services/proxyRetryPolicy.js', () => ({
-  shouldRetryProxyRequest: () => false,
+  shouldRetryProxyRequest: (...args: unknown[]) => shouldRetryProxyRequestMock(...args),
   shouldAbortSameSiteEndpointFallback: () => false,
   RETRYABLE_TIMEOUT_PATTERNS: [/(request timed out|connection timed out|read timeout|\btimed out\b)/i],
 }));
@@ -104,6 +105,8 @@ describe('chat proxy site api endpoint rotation', () => {
     recordSuccessMock.mockReset();
     recordFailureMock.mockReset();
     refreshModelsAndRebuildRoutesMock.mockReset();
+    shouldRetryProxyRequestMock.mockReset();
+    shouldRetryProxyRequestMock.mockReturnValue(false);
     reportProxyAllFailedMock.mockReset();
     reportTokenExpiredMock.mockReset();
     estimateProxyCostMock.mockClear();
@@ -322,5 +325,95 @@ describe('chat proxy site api endpoint rotation', () => {
       return (init.headers as Record<string, string>)?.Authorization;
     });
     expect(new Set(authorizations)).toEqual(new Set(['Bearer sk-transient']));
+  });
+
+  it('fails over to the next channel after transient 403 same-channel attempts are exhausted', async () => {
+    shouldRetryProxyRequestMock.mockReturnValue(true);
+
+    const site = await db.insert(schema.sites).values({
+      name: 'transient-403-exhaust-panel',
+      url: 'https://api.example.com',
+      platform: 'openai',
+      status: 'active',
+    }).returning().get();
+
+    const account = await db.insert(schema.accounts).values({
+      siteId: site.id,
+      username: 'transient-exhaust-user',
+      accessToken: '',
+      apiToken: 'sk-transient',
+      status: 'active',
+      checkinEnabled: false,
+      extraConfig: JSON.stringify({ credentialMode: 'apikey' }),
+    }).returning().get();
+
+    selectChannelMock.mockReturnValue({
+      channel: { id: 11, routeId: 22 },
+      site,
+      account,
+      tokenName: 'default',
+      tokenValue: 'sk-transient',
+      actualModel: 'gpt-4o-mini',
+    });
+    selectNextChannelMock.mockReturnValue({
+      channel: { id: 12, routeId: 22 },
+      site,
+      account,
+      tokenName: 'fallback',
+      tokenValue: 'sk-fallback',
+      actualModel: 'gpt-4o-mini',
+    });
+
+    fetchMock
+      .mockResolvedValueOnce(new Response('transient forbidden 1', { status: 403 }))
+      .mockResolvedValueOnce(new Response('transient forbidden 2', { status: 403 }))
+      .mockResolvedValueOnce(new Response('transient forbidden 3', { status: 403 }))
+      .mockResolvedValueOnce(new Response('transient forbidden 4', { status: 403 }))
+      .mockResolvedValueOnce(new Response('transient forbidden 5', { status: 403 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        id: 'chatcmpl-after-failover',
+        object: 'chat.completion',
+        created: 1_706_000_001,
+        model: 'gpt-4o-mini',
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: 'ok from fallback after 403' },
+          finish_reason: 'stop',
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }));
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()?.choices?.[0]?.message?.content).toBe('ok from fallback after 403');
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(selectChannelMock).toHaveBeenCalledTimes(1);
+    expect(selectNextChannelMock).toHaveBeenCalledTimes(1);
+    expect(recordFailureMock).toHaveBeenCalledTimes(1);
+    expect(recordSuccessMock).toHaveBeenCalledTimes(1);
+
+    const authorizations = fetchMock.mock.calls.map((call) => {
+      const [, init] = call as [string, RequestInit];
+      return (init.headers as Record<string, string>)?.Authorization;
+    });
+    expect(authorizations).toEqual([
+      'Bearer sk-transient',
+      'Bearer sk-transient',
+      'Bearer sk-transient',
+      'Bearer sk-transient',
+      'Bearer sk-transient',
+      'Bearer sk-fallback',
+    ]);
   });
 });
