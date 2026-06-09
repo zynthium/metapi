@@ -78,6 +78,7 @@ type SiteRuntimeFailureContext = {
   status?: number | null;
   errorText?: string | null;
   modelName?: string | null;
+  tokenHealthImpact?: 'record' | 'skip';
 };
 
 type SiteRuntimeHealthState = {
@@ -1945,7 +1946,7 @@ export class TokenRouter {
 
     const match = await this.findRoute(requestedModel, downstreamPolicy);
     if (!match) return null;
-    return await this.selectFromMatch(match, requestedModel, downstreamPolicy, excludeChannelIds);
+    return await this.selectNextFromMatch(match, requestedModel, downstreamPolicy, excludeChannelIds);
   }
 
   async selectPreferredChannel(
@@ -2899,7 +2900,7 @@ export class TokenRouter {
     const normalizedContext: SiteRuntimeFailureContext = typeof context === 'string'
       ? { modelName: context }
       : (context ?? {});
-    if (typeof ch.tokenId === 'number' && ch.tokenId > 0) {
+    if (typeof ch.tokenId === 'number' && ch.tokenId > 0 && normalizedContext.tokenHealthImpact !== 'skip') {
       await recordAccountTokenRequestFailure({
         tokenId: ch.tokenId,
         modelName: normalizedContext.modelName,
@@ -3207,6 +3208,69 @@ export class TokenRouter {
     }
 
     return null;
+  }
+
+  private async selectNextFromMatch(
+    match: RouteMatch,
+    requestedModel: string,
+    downstreamPolicy: DownstreamRoutingPolicy,
+    excludeChannelIds: number[] = [],
+    recordSelection = true,
+  ): Promise<SelectedChannel | null> {
+    const mappedModel = resolveMappedModel(requestedModel, match.route.modelMapping);
+    const requestedByDisplayName = isRouteDisplayNameMatch(requestedModel, match.route.displayName);
+    const bypassSourceModelCheck = requestedByDisplayName;
+    const routeStrategy = resolveRouteStrategy(match.route);
+    const runtimeModelResolver = requestedByDisplayName
+      ? ((candidate: RouteChannelCandidate) => normalizeChannelSourceModel(candidate.channel.sourceModel) || mappedModel)
+      : mappedModel;
+
+    const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
+    const available = match.channels.filter((candidate) => {
+      if (routeStrategy === 'lowest_multiplier') {
+        if (isOauthRouteUnitCandidate(candidate)) return false;
+        if ((candidate.channel.consecutiveFailCount ?? 0) >= 3) return false;
+      }
+      return this.getCandidateEligibilityReasons(candidate, {
+        requestedModel,
+        bypassSourceModelCheck,
+        excludeChannelIds,
+        nowIso,
+        downstreamPolicy,
+      }).length === 0;
+    });
+
+    if (available.length === 0) return null;
+
+    const breakerFiltered = filterSiteRuntimeBrokenCandidatesByModel(available, runtimeModelResolver, nowMs);
+    const selectable = routeStrategy === 'round_robin'
+      ? breakerFiltered.candidates
+      : filterRecentlyFailedCandidates(breakerFiltered.candidates, nowMs);
+    const selected = this.selectSequentialFailoverCandidate(
+      match.channels,
+      selectable,
+      excludeChannelIds,
+    );
+    if (!selected) return null;
+
+    const stableFirstRotationKey = routeStrategy === 'stable_first'
+      ? this.buildStableFirstRotationKey(match.route.id, requestedModel)
+      : undefined;
+    return await this.finalizeSelectedCandidateForDispatch(
+      selected,
+      match,
+      requestedModel,
+      mappedModel,
+      downstreamPolicy,
+      recordSelection,
+      nowIso,
+      nowMs,
+      stableFirstRotationKey,
+      stableFirstRotationKey ? `${stableFirstRotationKey}:observe` : undefined,
+      false,
+      excludeChannelIds,
+    );
   }
 
   private async selectPreferredFromMatch(
@@ -3631,6 +3695,43 @@ export class TokenRouter {
 
   private selectRoundRobinCandidate(candidates: RouteChannelCandidate[]): RouteChannelCandidate | null {
     return this.getRoundRobinCandidates(candidates)[0] ?? null;
+  }
+
+  private getSequentialFailoverCandidates(candidates: RouteChannelCandidate[]): RouteChannelCandidate[] {
+    return [...candidates].sort((left, right) => {
+      const priorityOrder = (left.channel.priority ?? 0) - (right.channel.priority ?? 0);
+      if (priorityOrder !== 0) return priorityOrder;
+      return (left.channel.id ?? 0) - (right.channel.id ?? 0);
+    });
+  }
+
+  private selectSequentialFailoverCandidate(
+    allCandidates: RouteChannelCandidate[],
+    selectableCandidates: RouteChannelCandidate[],
+    excludeChannelIds: number[],
+  ): RouteChannelCandidate | null {
+    if (selectableCandidates.length === 0) return null;
+
+    const orderedAll = this.getSequentialFailoverCandidates(allCandidates);
+    const selectableByChannelId = new Map<number, RouteChannelCandidate>(
+      selectableCandidates.map((candidate) => [candidate.channel.id, candidate]),
+    );
+    const lastTriedChannelId = [...excludeChannelIds]
+      .reverse()
+      .find((channelId) => orderedAll.some((candidate) => candidate.channel.id === channelId));
+    const lastTriedIndex = typeof lastTriedChannelId === 'number'
+      ? orderedAll.findIndex((candidate) => candidate.channel.id === lastTriedChannelId)
+      : -1;
+    const startIndex = lastTriedIndex >= 0 ? lastTriedIndex + 1 : 0;
+
+    for (let offset = 0; offset < orderedAll.length; offset += 1) {
+      const candidate = orderedAll[(startIndex + offset) % orderedAll.length];
+      if (!candidate) continue;
+      const selectable = selectableByChannelId.get(candidate.channel.id);
+      if (selectable) return selectable;
+    }
+
+    return null;
   }
 
   private compareStableFirstCandidates(left: RouteChannelCandidate, right: RouteChannelCandidate): number {

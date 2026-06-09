@@ -312,7 +312,7 @@ export async function probeRuntimeModel(input: {
       const status = result.status || 0;
       const unsupported = classifyUnsupportedFailure(status, rawErrorText);
       const retryable = !unsupported && isRetryableFailure(status, rawErrorText);
-      if (retryable && attempt < retryAttempts) {
+      if ((retryable || unsupported) && attempt < retryAttempts) {
         continue;
       }
       return {

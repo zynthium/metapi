@@ -25,6 +25,7 @@ import { refreshSub2ApiManagedSessionSingleflight } from './sub2apiRefreshSingle
 import { retryRemoteOperation } from './remoteRetry.js';
 
 const BALANCE_REFRESH_RETRY_ATTEMPTS = 3;
+const BALANCE_EXPIRED_CONFIRMATION_ATTEMPTS = 4;
 
 function isSiteDisabled(status?: string | null): boolean {
   return (status || 'active') === 'disabled';
@@ -54,6 +55,11 @@ function shouldAttemptAutoRelogin(message?: string | null): boolean {
 function shouldReportExpired(message?: string | null): boolean {
   if (!message) return false;
   return isTokenExpiredError({ message });
+}
+
+function getExpiredConfirmationBackoffMs(attempt: number): number {
+  const normalized = Math.max(1, Math.trunc(attempt));
+  return Math.min(50 * (2 ** (normalized - 1)), 250);
 }
 
 function isUnsupportedCheckinRuntimeHealth(health: ReturnType<typeof extractRuntimeHealth>): boolean {
@@ -290,6 +296,10 @@ export async function refreshBalance(
   let balanceInfo: BalanceInfo | null = null;
 
   const accountProxyUrl = resolveProxyUrlFromExtraConfig(account.extraConfig);
+  const readBalanceOnce = (token: string) => withAccountProxyOverride(
+    accountProxyUrl,
+    () => adapter.getBalance(site.url, token, platformUserId),
+  );
 
   if (isSub2ApiPlatform(site.platform)) {
     const managedAuth = getSub2ApiAuthFromExtraConfig(activeExtraConfig);
@@ -309,9 +319,24 @@ export async function refreshBalance(
   const readBalance = async (token: string) => retryRemoteOperation({
     label: `balance:${accountId}`,
     attempts: options.retryAttempts ?? BALANCE_REFRESH_RETRY_ATTEMPTS,
-    run: () => withAccountProxyOverride(accountProxyUrl,
-      () => adapter.getBalance(site.url, token, platformUserId)),
+    run: () => readBalanceOnce(token),
   });
+  const confirmExpiredBalanceFailure = async (token: string, message: string): Promise<boolean> => {
+    if (!shouldReportExpired(message)) return false;
+    for (let attempt = 1; attempt <= BALANCE_EXPIRED_CONFIRMATION_ATTEMPTS; attempt += 1) {
+      try {
+        const candidate = await readBalanceOnce(token);
+        if (candidate) return false;
+      } catch (error: any) {
+        const confirmMessage = appendSessionTokenRebindHint(error?.message || 'unknown error');
+        if (!shouldReportExpired(confirmMessage)) return false;
+      }
+      if (attempt < BALANCE_EXPIRED_CONFIRMATION_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, getExpiredConfirmationBackoffMs(attempt)));
+      }
+    }
+    return true;
+  };
   const handleBalanceError = async (err: any) => {
     const message = appendSessionTokenRebindHint(err?.message || 'unknown error');
     if (updateRuntimeHealthOnFailure) {
@@ -321,7 +346,7 @@ export async function refreshBalance(
         source: 'balance',
       });
     }
-    if (shouldReportExpired(message)) {
+    if (await confirmExpiredBalanceFailure(activeAccessToken, message)) {
       await reportTokenExpired({
         accountId: account.id,
         username: account.username,

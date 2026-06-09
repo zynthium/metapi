@@ -17,6 +17,7 @@ const NETWORK_FAILURE_PATTERNS = [
 ];
 
 export const SITE_API_ENDPOINT_COOLDOWN_MS = 5 * 60 * 1000;
+export const SITE_API_ENDPOINT_POOL_UNAVAILABLE_MESSAGE = '当前站点的 API 请求地址均不可用';
 
 type SiteRow = typeof schema.sites.$inferSelect;
 type SiteApiEndpointRow = typeof schema.siteApiEndpoints.$inferSelect;
@@ -149,6 +150,33 @@ export function classifySiteApiEndpointFailure(
   return { retryable: false, rotateToNextEndpoint: false, failureReason };
 }
 
+export function isSiteApiEndpointPoolUnavailableError(error: unknown): boolean {
+  return error instanceof Error
+    && error.message === SITE_API_ENDPOINT_POOL_UNAVAILABLE_MESSAGE;
+}
+
+export function shouldSiteApiEndpointFailureAffectTokenHealth(error: unknown): boolean {
+  if (isSiteApiEndpointPoolUnavailableError(error)) return false;
+
+  const candidate = error as {
+    name?: unknown;
+    status?: unknown;
+    message?: unknown;
+  } | null | undefined;
+  const isEndpointRequestError = error instanceof SiteApiEndpointRequestError
+    || candidate?.name === 'SiteApiEndpointRequestError';
+  if (!isEndpointRequestError) return true;
+
+  const status = typeof candidate?.status === 'number' ? candidate.status : undefined;
+  const message = typeof candidate?.message === 'string' ? candidate.message : undefined;
+  const disposition = classifySiteApiEndpointFailure({
+    status,
+    message,
+    error,
+  });
+  return !disposition.rotateToNextEndpoint;
+}
+
 export async function selectSiteApiEndpointTarget(
   site: SiteRow,
   now?: string | Date,
@@ -207,7 +235,7 @@ export async function requireSiteApiBaseUrl(
 ): Promise<string> {
   const baseUrl = await resolveSiteApiBaseUrl(site, now);
   if (baseUrl) return baseUrl;
-  throw new Error('当前站点的 API 请求地址均不可用');
+  throw new Error(SITE_API_ENDPOINT_POOL_UNAVAILABLE_MESSAGE);
 }
 
 export async function recordSiteApiEndpointFailure(
@@ -258,11 +286,11 @@ export async function runWithSiteApiEndpointPool<T>(
     const target = await selectSiteApiEndpointTarget(site);
     if (!target) {
       if (lastError) throw lastError;
-      throw new Error('当前站点的 API 请求地址均不可用');
+      throw new Error(SITE_API_ENDPOINT_POOL_UNAVAILABLE_MESSAGE);
     }
     if (target.endpointId && attemptedEndpointIds.has(target.endpointId)) {
       if (lastError) throw lastError;
-      throw new Error('当前站点的 API 请求地址均不可用');
+      throw new Error(SITE_API_ENDPOINT_POOL_UNAVAILABLE_MESSAGE);
     }
 
     try {

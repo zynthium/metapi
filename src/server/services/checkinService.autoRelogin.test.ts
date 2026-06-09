@@ -199,6 +199,39 @@ describe('checkinService auto relogin', () => {
     expect(reportTokenExpiredMock).not.toHaveBeenCalled();
   });
 
+  it('requires five expired checkin confirmations before reporting token expired', async () => {
+    selectAllMock.mockReturnValue([
+      {
+        accounts: {
+          id: 22,
+          username: 'expired-checkin-user',
+          accessToken: 'expired-token',
+          status: 'active',
+          extraConfig: null,
+        },
+        sites: {
+          id: 22,
+          name: 'expired-demo',
+          url: 'https://expired.example.com',
+          platform: 'new-api',
+        },
+      },
+    ]);
+
+    adapterMock.checkin.mockResolvedValue({
+      success: false,
+      message: 'HTTP 401: access token required',
+    });
+
+    const { checkinAccount } = await import('./checkinService.js');
+    const result = await checkinAccount(22);
+
+    expect(result.success).toBe(false);
+    expect(adapterMock.login).not.toHaveBeenCalled();
+    expect(adapterMock.checkin).toHaveBeenCalledTimes(5);
+    expect(reportTokenExpiredMock).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps successful checkin as success when message is 签到成功', async () => {
     selectAllMock.mockReturnValue([
       {

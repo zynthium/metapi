@@ -537,6 +537,7 @@ export function createSurfaceFailureToolkit(input: {
       status: number;
       errText: string;
       rawErrText?: string | null;
+      affectsTokenHealth?: boolean | null;
       isStream?: boolean | null;
       firstByteLatencyMs?: number | null;
       latencyMs: number;
@@ -547,6 +548,7 @@ export function createSurfaceFailureToolkit(input: {
         status: args.status,
         errorText: rawErrText,
         modelName: args.modelName,
+        ...(args.affectsTokenHealth === false ? { tokenHealthImpact: 'skip' as const } : {}),
       });
       await log({
         selected: args.selected,
@@ -600,6 +602,7 @@ export function createSurfaceFailureToolkit(input: {
       requestedModel: string;
       modelName: string;
       failure: { status: number; reason: string };
+      affectsTokenHealth?: boolean | null;
       isStream?: boolean | null;
       firstByteLatencyMs?: number | null;
       latencyMs: number;
@@ -613,6 +616,7 @@ export function createSurfaceFailureToolkit(input: {
         status: args.failure.status,
         errorText: args.failure.reason,
         modelName: args.modelName,
+        ...(args.affectsTokenHealth === false ? { tokenHealthImpact: 'skip' as const } : {}),
       });
       await log({
         selected: args.selected,
@@ -656,6 +660,7 @@ export function createSurfaceFailureToolkit(input: {
       requestedModel: string;
       modelName: string;
       errorMessage: string;
+      affectsTokenHealth?: boolean | null;
       isStream?: boolean | null;
       firstByteLatencyMs?: number | null;
       latencyMs: number;
@@ -664,6 +669,7 @@ export function createSurfaceFailureToolkit(input: {
       await tokenRouter.recordFailure(args.selected.channel.id, {
         errorText: args.errorMessage,
         modelName: args.modelName,
+        ...(args.affectsTokenHealth === false ? { tokenHealthImpact: 'skip' as const } : {}),
       });
       await log({
         selected: args.selected,
@@ -685,6 +691,7 @@ export function createSurfaceFailureToolkit(input: {
       requestedModel: string;
       modelName: string;
       errorMessage: string | null;
+      affectsTokenHealth?: boolean | null;
       isStream?: boolean | null;
       firstByteLatencyMs?: number | null;
       latencyMs: number;
@@ -702,11 +709,13 @@ export function createSurfaceFailureToolkit(input: {
           status: args.runtimeFailureStatus,
           errorText: errorMessage,
           modelName: args.modelName,
+          ...(args.affectsTokenHealth === false ? { tokenHealthImpact: 'skip' as const } : {}),
         });
       } else {
         await tokenRouter.recordFailure(args.selected.channel.id, {
           errorText: errorMessage,
           modelName: args.modelName,
+          ...(args.affectsTokenHealth === false ? { tokenHealthImpact: 'skip' as const } : {}),
         });
       }
       await log({

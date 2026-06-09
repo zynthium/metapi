@@ -67,7 +67,12 @@ import {
   selectSurfaceChannelForAttempt,
   trySurfaceOauthRefreshRecovery,
 } from './sharedSurface.js';
-import { runWithSiteApiEndpointPool, SiteApiEndpointRequestError } from '../../services/siteApiEndpointService.js';
+import {
+  isSiteApiEndpointPoolUnavailableError,
+  runWithSiteApiEndpointPool,
+  shouldSiteApiEndpointFailureAffectTokenHealth,
+  SiteApiEndpointRequestError,
+} from '../../services/siteApiEndpointService.js';
 import {
   buildSurfaceProxyDebugResponseHeaders,
   captureSurfaceProxyDebugSuccessResponseBody,
@@ -1016,6 +1021,7 @@ export async function handleChatSurfaceRequest(
       const isSiteApiEndpointFailure = (
         err instanceof SiteApiEndpointRequestError
         || err?.name === 'SiteApiEndpointRequestError'
+        || isSiteApiEndpointPoolUnavailableError(err)
         || err?.siteApiEndpointUpstreamFailure === true
         || err?.serviceTierBlocked === true
         || (endpointFailureStatus !== null && endpointFailureStatus >= 500)
@@ -1043,6 +1049,7 @@ export async function handleChatSurfaceRequest(
           status: endpointFailureStatus || 502,
           errText: err.message || 'unknown error',
           rawErrText: err.rawErrText || err.message || 'unknown error',
+          affectsTokenHealth: shouldSiteApiEndpointFailureAffectTokenHealth(err),
           isStream,
           latencyMs: Date.now() - startTime,
           retryCount,
@@ -1067,6 +1074,7 @@ export async function handleChatSurfaceRequest(
         requestedModel,
         modelName,
         errorMessage: err?.message || 'network failure',
+        affectsTokenHealth: isSiteApiEndpointPoolUnavailableError(err) ? false : undefined,
         isStream,
         latencyMs: Date.now() - startTime,
         retryCount,
@@ -1485,6 +1493,7 @@ export async function handleClaudeCountTokensSurfaceRequest(
       const isSiteApiEndpointFailure = (
         error instanceof SiteApiEndpointRequestError
         || error?.name === 'SiteApiEndpointRequestError'
+        || isSiteApiEndpointPoolUnavailableError(error)
         || error?.siteApiEndpointUpstreamFailure === true
         || error?.serviceTierBlocked === true
         || (endpointFailureStatus !== null && endpointFailureStatus >= 500)
@@ -1512,6 +1521,7 @@ export async function handleClaudeCountTokensSurfaceRequest(
           status: endpointFailureStatus || 502,
           errText: error.message || 'unknown error',
           rawErrText: error.rawErrText || error.message || 'unknown error',
+          affectsTokenHealth: shouldSiteApiEndpointFailureAffectTokenHealth(error),
           isStream: false,
           latencyMs: Date.now() - startTime,
           retryCount,
@@ -1532,6 +1542,7 @@ export async function handleClaudeCountTokensSurfaceRequest(
         requestedModel,
         modelName,
         errorMessage: error?.message || 'network failure',
+        affectsTokenHealth: isSiteApiEndpointPoolUnavailableError(error) ? false : undefined,
         isStream: false,
         latencyMs: Date.now() - startTime,
         retryCount,

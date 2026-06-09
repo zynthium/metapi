@@ -16,7 +16,11 @@ import { detectDownstreamClientContext, type DownstreamClientContext } from '../
 import { insertProxyLog } from '../../services/proxyLogStore.js';
 import { fetchWithObservedFirstByte, getObservedResponseMeta } from '../../proxy-core/firstByteTimeout.js';
 import { getProxyMaxChannelRetries } from '../../services/proxyChannelRetry.js';
-import { runWithSiteApiEndpointPool, SiteApiEndpointRequestError } from '../../services/siteApiEndpointService.js';
+import {
+  runWithSiteApiEndpointPool,
+  shouldSiteApiEndpointFailureAffectTokenHealth,
+  SiteApiEndpointRequestError,
+} from '../../services/siteApiEndpointService.js';
 import { retryForbiddenResponseOnSameChannel } from '../../proxy-core/orchestration/forbiddenSameChannelRetry.js';
 import {
   buildForcedChannelUnavailableMessage,
@@ -192,6 +196,7 @@ export async function searchProxyRoute(app: FastifyInstance) {
           status,
           errorText,
           modelName: upstreamModel,
+          ...(shouldSiteApiEndpointFailureAffectTokenHealth(error) ? {} : { tokenHealthImpact: 'skip' as const }),
         }));
         logProxy(
           selected,

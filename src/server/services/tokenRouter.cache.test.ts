@@ -996,6 +996,67 @@ describe('TokenRouter runtime cache', () => {
     });
   });
 
+  it('does not record endpoint transport failures into account token health', async () => {
+    const site = await db.insert(schema.sites).values({
+      name: 'endpoint-token-health-site',
+      url: 'https://endpoint-token-health.example.com',
+      platform: 'new-api',
+      status: 'active',
+    }).returning().get();
+
+    const account = await db.insert(schema.accounts).values({
+      siteId: site.id,
+      username: 'endpoint-token-health-user',
+      accessToken: 'endpoint-token-health-access-token',
+      apiToken: 'endpoint-token-health-api-token',
+      status: 'active',
+    }).returning().get();
+
+    const token = await db.insert(schema.accountTokens).values({
+      accountId: account.id,
+      name: 'endpoint-token-health-token',
+      token: 'sk-endpoint-token-health',
+      enabled: true,
+      isDefault: true,
+    }).returning().get();
+
+    const route = await db.insert(schema.tokenRoutes).values({
+      modelPattern: 'gpt-5.4-mini',
+      routingStrategy: 'weighted',
+      enabled: true,
+    }).returning().get();
+
+    const channel = await db.insert(schema.routeChannels).values({
+      routeId: route.id,
+      accountId: account.id,
+      tokenId: token.id,
+      priority: 0,
+      weight: 10,
+      enabled: true,
+    }).returning().get();
+
+    const router = new TokenRouter();
+    await router.recordFailure(channel.id, {
+      status: 502,
+      errorText: '当前站点的 API 请求地址均不可用',
+      modelName: 'gpt-5.4-mini',
+      tokenHealthImpact: 'skip',
+    });
+
+    const health = await db.select()
+      .from(schema.accountTokenHealth)
+      .where(eq(schema.accountTokenHealth.tokenId, token.id))
+      .get();
+    expect(health).toBeUndefined();
+
+    const updatedChannel = await db.select()
+      .from(schema.routeChannels)
+      .where(eq(schema.routeChannels.id, channel.id))
+      .get();
+    expect(updatedChannel?.failCount).toBe(1);
+    expect(updatedChannel?.cooldownUntil).toBeTruthy();
+  });
+
   it('applies staged cooldowns for round robin after every three consecutive failures', async () => {
     const site = await db.insert(schema.sites).values({
       name: 'round-robin-cooldown-site',

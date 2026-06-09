@@ -1822,4 +1822,64 @@ describe('TokenRouter selection scoring', () => {
       queuedLease.lease.release();
     }
   });
+
+  it('selects the next configured channel for request failover instead of re-running weighted random choice', async () => {
+    const originalWeights = { ...config.routingWeights };
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    try {
+      config.routingWeights = {
+        baseWeightFactor: 1,
+        valueScoreFactor: 0,
+        costWeight: 0,
+        balanceWeight: 0,
+        usageWeight: 0,
+      };
+
+      const route = await createRoute('gpt-5.7');
+
+      const siteA = await createSite('failover-order-a');
+      const accountA = await createAccount(siteA.id, 'failover-order-user-a');
+      const tokenA = await createToken(accountA.id, 'failover-order-token-a');
+      const channelA = await db.insert(schema.routeChannels).values({
+        routeId: route.id,
+        accountId: accountA.id,
+        tokenId: tokenA.id,
+        priority: 0,
+        weight: 10,
+        enabled: true,
+      }).returning().get();
+
+      const siteB = await createSite('failover-order-b');
+      const accountB = await createAccount(siteB.id, 'failover-order-user-b');
+      const tokenB = await createToken(accountB.id, 'failover-order-token-b');
+      const channelB = await db.insert(schema.routeChannels).values({
+        routeId: route.id,
+        accountId: accountB.id,
+        tokenId: tokenB.id,
+        priority: 1,
+        weight: 1,
+        enabled: true,
+      }).returning().get();
+
+      const siteC = await createSite('failover-order-c');
+      const accountC = await createAccount(siteC.id, 'failover-order-user-c');
+      const tokenC = await createToken(accountC.id, 'failover-order-token-c');
+      await db.insert(schema.routeChannels).values({
+        routeId: route.id,
+        accountId: accountC.id,
+        tokenId: tokenC.id,
+        priority: 1,
+        weight: 10_000,
+        enabled: true,
+      }).returning().get();
+
+      const router = new TokenRouter();
+      const selected = await router.selectNextChannel('gpt-5.7', [channelA.id]);
+
+      expect(selected?.channel.id).toBe(channelB.id);
+    } finally {
+      randomSpy.mockRestore();
+      config.routingWeights = originalWeights;
+    }
+  });
 });

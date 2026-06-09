@@ -96,7 +96,12 @@ import {
   safeUpdateSurfaceProxyDebugSelection,
   startSurfaceProxyDebugTrace,
 } from '../../services/proxyDebugTraceRuntime.js';
-import { runWithSiteApiEndpointPool, SiteApiEndpointRequestError } from '../../services/siteApiEndpointService.js';
+import {
+  isSiteApiEndpointPoolUnavailableError,
+  runWithSiteApiEndpointPool,
+  shouldSiteApiEndpointFailureAffectTokenHealth,
+  SiteApiEndpointRequestError,
+} from '../../services/siteApiEndpointService.js';
 import {
   buildForcedChannelUnavailableMessage,
   canRetryChannelSelection,
@@ -1387,6 +1392,7 @@ export async function handleOpenAiResponsesSurfaceRequest(
         const isSiteApiEndpointFailure = (
           err instanceof SiteApiEndpointRequestError
           || err?.name === 'SiteApiEndpointRequestError'
+          || isSiteApiEndpointPoolUnavailableError(err)
           || err?.siteApiEndpointUpstreamFailure === true
           || (endpointFailureStatus !== null && endpointFailureStatus >= 500)
         );
@@ -1398,6 +1404,7 @@ export async function handleOpenAiResponsesSurfaceRequest(
             status: endpointFailureStatus || 502,
             errText: err?.message || 'unknown error',
             rawErrText: err?.rawErrText || err?.message || 'unknown error',
+            affectsTokenHealth: shouldSiteApiEndpointFailureAffectTokenHealth(err),
             isStream,
             latencyMs: Date.now() - startTime,
             retryCount,
@@ -1422,6 +1429,7 @@ export async function handleOpenAiResponsesSurfaceRequest(
           requestedModel,
           modelName,
           errorMessage: err?.message || 'network failure',
+          affectsTokenHealth: isSiteApiEndpointPoolUnavailableError(err) ? false : undefined,
           isStream,
           latencyMs: Date.now() - startTime,
           retryCount,

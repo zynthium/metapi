@@ -1390,7 +1390,12 @@ describe('refreshModelsForAccount credential discovery', () => {
     const rows = await db.select().from(schema.modelAvailability)
       .where(eq(schema.modelAvailability.accountId, account.id))
       .all();
-    expect(rows).toEqual([]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      modelName: 'gpt-5.2-codex',
+      available: true,
+      checkedAt: '2026-03-16T12:00:00.000Z',
+    });
 
     const latest = await db.select().from(schema.accounts)
       .where(eq(schema.accounts.id, account.id))

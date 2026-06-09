@@ -515,6 +515,48 @@ describe('selectSurfaceChannelForAttempt', () => {
     }));
   });
 
+  it('passes through endpoint-only failures without token health impact', async () => {
+    composeProxyLogMessageMock.mockReturnValue('endpoint pool unavailable');
+    formatUtcSqlDateTimeMock.mockReturnValue('2026-03-21 22:00:00');
+    insertProxyLogMock.mockResolvedValue(undefined);
+    shouldRetryProxyRequestMock.mockReturnValue(true);
+    isTokenExpiredErrorMock.mockReturnValue(false);
+    recordOauthQuotaResetHintMock.mockResolvedValue(null);
+
+    const { createSurfaceFailureToolkit } = await import('./sharedSurface.js');
+    const toolkit = createSurfaceFailureToolkit({
+      warningScope: 'chat',
+      downstreamPath: '/v1/chat/completions',
+      maxRetries: 2,
+      clientContext: null,
+      downstreamApiKeyId: 44,
+    });
+
+    const result = await toolkit.handleUpstreamFailure({
+      selected: {
+        channel: { id: 11, routeId: 22 },
+        account: { id: 33, username: 'oauth-user' },
+        site: { name: 'Codex OAuth' },
+        actualModel: 'upstream-model',
+      },
+      requestedModel: 'gpt-5.2',
+      modelName: 'upstream-model',
+      status: 502,
+      errText: '当前站点的 API 请求地址均不可用',
+      affectsTokenHealth: false,
+      latencyMs: 1200,
+      retryCount: 0,
+    });
+
+    expect(result).toEqual({ action: 'retry' });
+    expect(recordFailureMock).toHaveBeenCalledWith(11, {
+      status: 502,
+      errorText: '当前站点的 API 请求地址均不可用',
+      modelName: 'upstream-model',
+      tokenHealthImpact: 'skip',
+    });
+  });
+
   it('does not report token expiration while a retryable upstream failure can still retry', async () => {
     composeProxyLogMessageMock.mockReturnValue('normalized error');
     formatUtcSqlDateTimeMock.mockReturnValue('2026-03-21 22:00:00');

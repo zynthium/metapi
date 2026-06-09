@@ -41,6 +41,7 @@ import { retryRemoteOperation } from './remoteRetry.js';
 const API_TOKEN_DISCOVERY_TIMEOUT_MS = 8_000;
 const MODEL_DISCOVERY_TIMEOUT_MS = 12_000;
 const MODEL_DISCOVERY_RETRY_ATTEMPTS = 3;
+const MODEL_INVALIDATION_CONFIRMATION_ATTEMPTS = 5;
 const MODEL_REFRESH_BATCH_SIZE = 3;
 const GEMINI_CLI_STATIC_MODELS = [
   'gemini-2.5-pro',
@@ -457,7 +458,11 @@ export async function probeSiteModels(
       const modelName = modelsToProbe[cursor++];
       try {
         const result = await probeRuntimeModel({
-          site, account, modelName, timeoutMs: config.modelAvailabilityProbeTimeoutMs,
+          site,
+          account,
+          modelName,
+          timeoutMs: config.modelAvailabilityProbeTimeoutMs,
+          retryAttempts: MODEL_INVALIDATION_CONFIRMATION_ATTEMPTS,
         });
         const threshold = options?.latencyThresholdMs ?? 0;
         const latencyExceeded = (
@@ -488,7 +493,7 @@ export async function probeSiteModels(
   // Restore original model order for the final details list
   const details = modelsToProbe.map((m) => detailsMap.get(m)!);
 
-  const unsupportedModels = details.filter((d) => d.status === 'unsupported' || d.status === 'inconclusive').map((d) => d.modelName);
+  const unsupportedModels = details.filter((d) => d.status === 'unsupported').map((d) => d.modelName);
   if (unsupportedModels.length > 0) {
     const checkedAt = new Date().toISOString();
     for (const modelName of unsupportedModels) {
@@ -550,6 +555,7 @@ async function runPostRefreshProbeIfEnabled(params: {
         account: params.account,
         modelName,
         timeoutMs: config.modelAvailabilityProbeTimeoutMs,
+        retryAttempts: MODEL_INVALIDATION_CONFIRMATION_ATTEMPTS,
       });
       const latencyExceeded = (
         result.status === 'supported'
@@ -566,11 +572,10 @@ async function runPostRefreshProbeIfEnabled(params: {
   }
 
   // Handle unsupported models
-  const unsupportedModels = details.filter((d) => d.status === 'unsupported' || d.status === 'inconclusive').map((d) => d.modelName);
+  const unsupportedModels = details.filter((d) => d.status === 'unsupported').map((d) => d.modelName);
   if (unsupportedModels.length > 0) {
     const checkedAt = new Date().toISOString();
     for (const modelName of unsupportedModels) {
-      // Mark model as unavailable
       await db.update(schema.modelAvailability)
         .set({ available: false, checkedAt })
         .where(and(
@@ -578,13 +583,11 @@ async function runPostRefreshProbeIfEnabled(params: {
           eq(schema.modelAvailability.modelName, modelName),
         ))
         .run();
-      // Add to site-level disabled models
       await db.insert(schema.siteDisabledModels)
         .values({ siteId: params.site.id, modelName })
         .onConflictDoNothing()
         .run();
     }
-    // Update account health
     const reason = unsupportedModels.length === 1
       ? `刷新后探测失败：模型 ${unsupportedModels[0]} 不可用`
       : `刷新后探测失败：${unsupportedModels.length} 个模型不可用（${unsupportedModels.slice(0, 3).join('、')}${unsupportedModels.length > 3 ? '…' : ''}）`;
@@ -594,7 +597,6 @@ async function runPostRefreshProbeIfEnabled(params: {
       source: 'post-refresh-probe',
       checkedAt,
     });
-    // Single route rebuild for all changes
     rebuildTokenRoutesFromAvailability().catch((err) => {
       console.warn('[post-refresh-probe] route rebuild failed', err);
     });
@@ -627,28 +629,21 @@ export async function refreshModelsForAccount(
   const adapter = getAdapter(site.platform);
   const accountProxyUrl = resolveProxyUrlFromExtraConfig(account.extraConfig);
 
-  const restoreAvailabilityOnFailure = options?.allowInactive === true;
-  const previousAccountTokens = restoreAvailabilityOnFailure
-    ? await db.select()
-      .from(schema.accountTokens)
-      .where(eq(schema.accountTokens.accountId, accountId))
-      .all()
-    : [];
-  const previousModelAvailability = restoreAvailabilityOnFailure
-    ? await db.select()
-      .from(schema.modelAvailability)
-      .where(and(
-        eq(schema.modelAvailability.accountId, accountId),
-        eq(schema.modelAvailability.isManual, false),
-      ))
-      .all()
-    : [];
-  const previousTokenModelAvailability = restoreAvailabilityOnFailure
-    ? (await Promise.all(previousAccountTokens.map(async (token) => db.select()
-      .from(schema.tokenModelAvailability)
-      .where(eq(schema.tokenModelAvailability.tokenId, token.id))
-      .all()))).flat()
-    : [];
+  const previousAccountTokens = await db.select()
+    .from(schema.accountTokens)
+    .where(eq(schema.accountTokens.accountId, accountId))
+    .all();
+  const previousModelAvailability = await db.select()
+    .from(schema.modelAvailability)
+    .where(and(
+      eq(schema.modelAvailability.accountId, accountId),
+      eq(schema.modelAvailability.isManual, false),
+    ))
+    .all();
+  const previousTokenModelAvailability = (await Promise.all(previousAccountTokens.map(async (token) => db.select()
+    .from(schema.tokenModelAvailability)
+    .where(eq(schema.tokenModelAvailability.tokenId, token.id))
+    .all()))).flat();
 
   const clearExistingAvailability = async () => {
     await db.delete(schema.modelAvailability)
@@ -671,7 +666,6 @@ export async function refreshModelsForAccount(
   };
 
   const restorePreviousAvailability = async () => {
-    if (!restoreAvailabilityOnFailure) return;
     await clearExistingAvailability();
     if (previousModelAvailability.length > 0) {
       await db.insert(schema.modelAvailability).values(
@@ -700,10 +694,12 @@ export async function refreshModelsForAccount(
   );
 
   if (isSiteDisabled(site.status)) {
+    await restorePreviousAvailability();
     return buildSkippedRefreshResult(accountId, 'site_disabled', '站点已禁用');
   }
 
   if (account.status !== 'active' && !options?.allowInactive) {
+    await restorePreviousAvailability();
     return buildSkippedRefreshResult(accountId, 'adapter_or_status', '平台不可用或账号未激活');
   }
 

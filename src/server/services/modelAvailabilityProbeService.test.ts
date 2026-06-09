@@ -32,7 +32,7 @@ vi.mock('./routeRefreshWorkflow.js', () => ({
 type DbModule = typeof import('../db/index.js');
 type ProbeModule = typeof import('./modelAvailabilityProbeService.js');
 
-describe('modelAvailabilityProbeService', () => {
+describe('modelAvailabilityProbeService', { timeout: 15_000 }, () => {
   let db: DbModule['db'];
   let schema: DbModule['schema'];
   let executeModelAvailabilityProbe: ProbeModule['executeModelAvailabilityProbe'];

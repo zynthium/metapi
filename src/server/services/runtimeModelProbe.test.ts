@@ -238,6 +238,31 @@ describe('probeRuntimeModel', () => {
     expect(dispatchRuntimeRequestMock).toHaveBeenCalledTimes(3);
   });
 
+  it('confirms definite unsupported probe results across the configured retry budget', async () => {
+    resolveUpstreamEndpointCandidatesMock.mockResolvedValue(['chat']);
+    dispatchRuntimeRequestMock.mockImplementation(async () => new Response(JSON.stringify({
+      error: {
+        message: 'The model `gpt-ghost` does not exist',
+      },
+    }), {
+      status: 404,
+      headers: { 'content-type': 'application/json' },
+    }));
+
+    const { probeRuntimeModel } = await import('./runtimeModelProbe.js');
+    const result = await probeRuntimeModel({
+      site,
+      account,
+      modelName: 'gpt-ghost',
+      timeoutMs: 1000,
+      retryAttempts: 5,
+    });
+
+    expect(result.status).toBe('unsupported');
+    expect(result.retryable).toBe(false);
+    expect(dispatchRuntimeRequestMock).toHaveBeenCalledTimes(5);
+  });
+
   it('does not immediately retry quota exhaustion probe results', async () => {
     resolveUpstreamEndpointCandidatesMock.mockResolvedValue(['chat']);
     dispatchRuntimeRequestMock.mockResolvedValue(new Response(JSON.stringify({

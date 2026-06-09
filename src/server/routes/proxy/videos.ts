@@ -26,7 +26,11 @@ import {
   recordRequestChannelFailure,
   selectProxyChannelForAttempt,
 } from '../../proxy-core/channelSelection.js';
-import { runWithSiteApiEndpointPool, SiteApiEndpointRequestError } from '../../services/siteApiEndpointService.js';
+import {
+  runWithSiteApiEndpointPool,
+  shouldSiteApiEndpointFailureAffectTokenHealth,
+  SiteApiEndpointRequestError,
+} from '../../services/siteApiEndpointService.js';
 import { retryForbiddenResponseOnSameChannel } from '../../proxy-core/orchestration/forbiddenSameChannelRetry.js';
 
 function rewriteVideoResponsePublicId(payload: unknown, publicId: string): unknown {
@@ -192,6 +196,7 @@ export async function videosProxyRoute(app: FastifyInstance) {
           status,
           errorText,
           modelName: upstreamModel,
+          ...(shouldSiteApiEndpointFailureAffectTokenHealth(error) ? {} : { tokenHealthImpact: 'skip' as const }),
         }));
         if ((status > 0 ? shouldRetryProxyRequest(status, errorText) : true) && retrySameChannelOrFailover(selected)) {
           continue;

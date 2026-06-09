@@ -144,7 +144,7 @@ describe('balanceService auto relogin', () => {
     expect(reportTokenExpiredMock).not.toHaveBeenCalled();
   });
 
-  it('reports token expired when relogin is unavailable', async () => {
+  it('requires five expired balance confirmations before reporting token expired when relogin is unavailable', async () => {
     selectAllMock.mockReturnValue([
       {
         accounts: {
@@ -163,12 +163,13 @@ describe('balanceService auto relogin', () => {
       },
     ]);
 
-    adapterMock.getBalance.mockRejectedValueOnce(new Error('HTTP 401: access token required'));
+    adapterMock.getBalance.mockRejectedValue(new Error('HTTP 401: access token required'));
 
     const { refreshBalance } = await import('./balanceService.js');
     await expect(refreshBalance(2)).rejects.toThrow('access token');
 
     expect(adapterMock.login).not.toHaveBeenCalled();
+    expect(adapterMock.getBalance).toHaveBeenCalledTimes(5);
     expect(reportTokenExpiredMock).toHaveBeenCalledTimes(1);
   });
 

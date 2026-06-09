@@ -22,6 +22,7 @@ import { isRetryableRemoteMessage, retryRemoteOperation } from './remoteRetry.js
 
 type CheckinExecutionStatus = 'success' | 'failed' | 'skipped';
 const CHECKIN_RETRY_ATTEMPTS = 3;
+const CHECKIN_EXPIRED_CONFIRMATION_ATTEMPTS = 4;
 
 function isSiteDisabled(status?: string | null): boolean {
   return (status || 'active') === 'disabled';
@@ -78,6 +79,11 @@ function shouldAttemptAutoRelogin(message?: string | null): boolean {
   if (text.includes('new-api-user')) return true;
   if (text.includes('access token')) return true;
   return false;
+}
+
+function getExpiredConfirmationBackoffMs(attempt: number): number {
+  const normalized = Math.max(1, Math.trunc(attempt));
+  return Math.min(50 * (2 ** (normalized - 1)), 250);
 }
 
 function inferRewardFromBalanceDelta(previousBalance: unknown, latestBalance: unknown): number {
@@ -180,11 +186,12 @@ export async function checkinAccount(accountId: number, options?: { skipEvent?: 
   const platformUserId = resolvePlatformUserId(account.extraConfig, account.username);
 
   const accountProxyUrl = resolveProxyUrlFromExtraConfig(account.extraConfig);
+  const runCheckinOnce = (token: string) => withAccountProxyOverride(accountProxyUrl,
+    () => adapter.checkin(site.url, token, platformUserId));
   const runCheckin = (token: string) => retryRemoteOperation({
     label: `checkin:${accountId}`,
     attempts: CHECKIN_RETRY_ATTEMPTS,
-    run: () => withAccountProxyOverride(accountProxyUrl,
-      () => adapter.checkin(site.url, token, platformUserId)),
+    run: () => runCheckinOnce(token),
     shouldRetryResult: (candidate) => (
       !candidate.success
       && !isAlreadyCheckedInMessage(candidate.message)
@@ -194,6 +201,24 @@ export async function checkinAccount(accountId: number, options?: { skipEvent?: 
       && isRetryableRemoteMessage(candidate.message)
     ),
   });
+  const confirmExpiredCheckinFailure = async (token: string, message: string): Promise<boolean> => {
+    if (!isTokenExpiredError({ message })) return false;
+    for (let attempt = 1; attempt <= CHECKIN_EXPIRED_CONFIRMATION_ATTEMPTS; attempt += 1) {
+      try {
+        const candidate = await runCheckinOnce(token);
+        const candidateMessage = candidate?.message || message;
+        if (candidate?.success) return false;
+        if (!isTokenExpiredError({ message: candidateMessage })) return false;
+      } catch (error: any) {
+        const confirmMessage = error?.message || message;
+        if (!isTokenExpiredError({ message: confirmMessage })) return false;
+      }
+      if (attempt < CHECKIN_EXPIRED_CONFIRMATION_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, getExpiredConfirmationBackoffMs(attempt)));
+      }
+    }
+    return true;
+  };
 
   let activeAccessToken = account.accessToken;
   let result = await runCheckin(activeAccessToken);
@@ -300,7 +325,7 @@ export async function checkinAccount(accountId: number, options?: { skipEvent?: 
       reason: result.message || '\u7b7e\u5230\u5931\u8d25',
       source: 'checkin',
     });
-    if (isTokenExpiredError({ message: result.message })) {
+    if (await confirmExpiredCheckinFailure(activeAccessToken, result.message || '')) {
       await reportTokenExpired({
         accountId: account.id,
         username: account.username,
